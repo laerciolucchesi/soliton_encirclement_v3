@@ -3,7 +3,7 @@
 This handler provides realistic, velocity-based mobility for nodes with
 explicit acceleration and velocity constraints.
 
-Author: Laércio Lucchesi
+Author: Laercio Lucchesi
 Date: December 27, 2025
 """
 

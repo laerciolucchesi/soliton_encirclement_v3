@@ -22,7 +22,7 @@ def main() -> None:
     u = np.linspace(-4.0, 4.0, 2001)
 
     plt.figure(figsize=(8.5, 5.5))
-    plt.plot(u, u**3, color="0.35", linestyle="--", linewidth=2, label=r"$u^3$ (referência)")
+    plt.plot(u, u**3, color="0.35", linestyle="--", linewidth=2, label=r"$u^3$ (reference)")
 
     for u_s in (0.5, 1.0, 2.0):
         g = soft_limiter(u, u_s=u_s, p=2.0)
@@ -31,7 +31,7 @@ def main() -> None:
     plt.axhline(0.0, color="0.85", linewidth=1)
     plt.axvline(0.0, color="0.85", linewidth=1)
 
-    plt.title("Limiter suave (p=2) vs cúbico")
+    plt.title("Soft limiter (p=2) vs cubic")
     plt.xlabel("u")
     plt.ylabel("g(u)")
     plt.grid(True, alpha=0.25)

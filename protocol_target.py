@@ -44,6 +44,7 @@ from config_param import (
     TARGET_STATE_BROADCAST_TIMER_STR,
 )
 from protocol_messages import AdversaryState, AgentState, TargetState
+from controllers import WrappedAnglePDController
 
 
 class TargetProtocol(IProtocol):
@@ -86,9 +87,11 @@ class TargetProtocol(IProtocol):
         self.adversary_state: Optional[Tuple[AdversaryState, float]] = None
         self.last_seq_adversary: int = -1
 
-        # PD state for omega_ref control
-        self._omega_err_prev: Optional[float] = None
-        self._omega_err_prev_time: Optional[float] = None
+        self.spin_controller = WrappedAnglePDController(
+            kp=TARGET_SWARM_OMEGA_PD_KP,
+            kd=TARGET_SWARM_OMEGA_PD_KD,
+            max_abs_output=TARGET_SWARM_OMEGA_PD_MAX_ABS,
+        )
 
 
         # Exactly one alive agent should hold the edge lambda value.
@@ -354,9 +357,7 @@ class TargetProtocol(IProtocol):
                 # Spin tracking disabled: do not compute angular error to the adversary.
                 # Keep omega_ref at the configured base value (usually 0.0).
                 omega_ref = float(omega_base)
-                # Reset PD memory so that re-enabling doesn't create derivative spikes.
-                self._omega_err_prev = None
-                self._omega_err_prev_time = None
+                self.spin_controller.reset()
             else:
                 # Vector 1 (unit): target -> adversary.
                 adv_unit = (1.0, 0.0)
@@ -390,40 +391,17 @@ class TargetProtocol(IProtocol):
                 else:
                     err = 0.0
 
-                # PD on err -> omega_ref.
-                kp = float(TARGET_SWARM_OMEGA_PD_KP)
-                kd = float(TARGET_SWARM_OMEGA_PD_KD)
-                max_abs = float(TARGET_SWARM_OMEGA_PD_MAX_ABS)
-                if not math.isfinite(kp):
-                    kp = 0.0
-                if not math.isfinite(kd):
-                    kd = 0.0
-                if not (math.isfinite(max_abs) and max_abs > 0.0):
-                    max_abs = float("inf")
-
-                derr = 0.0
                 if err == 0.0:
                     # Avoid derivative spikes when the direction is ill-defined.
-                    self._omega_err_prev = float(err)
-                    self._omega_err_prev_time = float(now)
-                elif self._omega_err_prev is not None and self._omega_err_prev_time is not None:
-                    dt = float(now - self._omega_err_prev_time)
-                    if math.isfinite(dt) and dt > 1e-6:
-                        derr = self._wrap_to_pi(err - float(self._omega_err_prev)) / dt
-
-                # If the PD gains are disabled, keep a pure open-loop spin.
-                # Otherwise, generate omega_ref purely from the angular error (no constant bias).
-                if kp == 0.0 and kd == 0.0:
+                    self.spin_controller.reset()
                     omega_ref = float(omega_base)
                 else:
-                    omega_ref = (kp * err) + (kd * derr)
-                if math.isfinite(omega_ref):
-                    omega_ref = max(-max_abs, min(max_abs, omega_ref))
-                else:
-                    omega_ref = float(omega_base)
-
-                self._omega_err_prev = float(err)
-                self._omega_err_prev_time = float(now)
+                    omega_ref = self.spin_controller.update(
+                        measurement=float(err),
+                        dt=float(self.target_state_broadcast_period),
+                    )
+                    if not math.isfinite(omega_ref):
+                        omega_ref = float(omega_base)
 
                 # end TARGET_SWARM_SPIN_ENABLE
 
@@ -874,7 +852,7 @@ class TargetProtocol(IProtocol):
             )
         
         # compute and print P95 rho for t >= 10s
-        df_win = df[df["timestamp"] >= 10.0]   # ou a coluna de tempo que você usa
+        df_win = df[df["timestamp"] >= 10.0]   # adjust the time column if needed
         p95_rho = df_win["rho"].quantile(0.95)
         print(f"P95 rho (t>=10s): {p95_rho:.6f}")
 

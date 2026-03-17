@@ -29,6 +29,7 @@ dependencies = [
     "gradysim>=0.7.0",
     "pandas>=2.0",
     "matplotlib>=3.7",
+    "simple-pid>=2.0",
 ]
 
 [project.optional-dependencies]

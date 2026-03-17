@@ -24,8 +24,6 @@ import json
 from config_param import (
     CONTROL_LOOP_TIMER_STR,
     CONTROL_PERIOD,
-    SOLITON_LOOP_TIMER_STR,
-    SOLITON_PERIOD,
     SIM_DEBUG,
     AGENT_STATE_TIMEOUT,
     TARGET_STATE_TIMEOUT,
@@ -33,24 +31,14 @@ from config_param import (
     PRUNE_EXPIRED_STATES,
     ENCIRCLEMENT_RADIUS,
     R_MIN,
-    K_R,
-    K_DR,
     VM_MAX_SPEED_XY,
     VM_MAX_SPEED_Z,
     K_TAU,
     BETA_U,
-    ALPHA_U,
-    C_COUPLING,
     K_E_TAU,
+    K_R,
+    K_DR,
     K_OMEGA_DAMP,
-    KAPPA_U_DIFF,
-    K_U_STEEPEN,
-    KAPPA_U_DISP,
-    BETA_Q,
-    K_Q_TO_U,
-    USE_Q_LAYER,
-    USE_SOFT_LIMITER_U,
-    U_lim,
     FAILURE_CHECK_PERIOD,
     FAILURE_CHECK_TIMER_STR,
     FAILURE_ENABLE,
@@ -58,52 +46,17 @@ from config_param import (
     FAILURE_OFF_TIME,
     FAILURE_RECOVER_TIMER_STR,
     EXPERIMENT_REPRODUCIBLE,
-    ANTI_WINDUP_ENABLE,
-    Q_LAYER_ARCH,
-    KDV_TYPE,
-    GAMMA_Q_CUBIC,
-    # Legacy: q -> K_Q_TO_U gain modulator (used when Q_LAYER_ARCH == "MODULATE_K_Q_TO_U")
-    Q_MOD_DELTA,
-    Q_MOD_MU,
-    Q_MOD_NU,
-    Q_MOD_EPS,
-    Q_MOD_USE_TANH,
-    Q_MOD_TANH_GAIN,
-    Q_MOD_FREEZE_ON_SAT,
-    # New: q -> u-parameter modulation (used when Q_LAYER_ARCH == "MODULATE_PARAMS")
-    Q_PARAM_ACC_DELTA,
-    Q_PARAM_ACC_BIDIR,
-    Q_PARAM_ACC_MIN_FACTOR,
-    Q_PARAM_ACC_MAX_FACTOR,
-    Q_PARAM_DIFF_ADD,
-    Q_PARAM_BETA_ADD,
-    Q_PARAM_DIFF_DELTA,
-    Q_PARAM_BETA_DELTA,
-    Q_ROUGH_MU,
-    Q_ROUGH_NU,
-    Q_ROUGH_EPS,
-    Q_ROUGH_USE_TANH,
-    Q_ROUGH_TANH_GAIN,
     )
 
 
 from protocol_messages import AgentState, TargetState
+from controllers import RadialDistanceController, TangentialSpacingController
 
 
 class AgentProtocol(IProtocol):
     """Implementation of agent protocol."""
 
     def __init__(self):
-        # --- Q-layer modulation state (inicializar ANTES de qualquer uso) ---
-        self.q0 = 1.0
-        self.q0_rough = 1.0
-        self.q_mod = 0.0
-        self.q_mod_f = 0.0
-        self.m_robust = 0.0
-        self.m_robust_f = 0.0
-        # Inicializa arquitetura do Q-layer a partir do config
-        self.q_layer_arch = Q_LAYER_ARCH
-
         super().__init__()
         self._logger = logging.getLogger()
 
@@ -117,13 +70,8 @@ class AgentProtocol(IProtocol):
             self._failure_rng = random.Random()
 
         self.control_period = CONTROL_PERIOD  # Control loop period in seconds
-        self.soliton_period = SOLITON_PERIOD  # Fast error-soliton loop period in seconds
-        self.use_q_layer = bool(USE_Q_LAYER)
-
         # Schedule the control loop timer for the first time
         self.schedule_control_loop_timer()
-        if self.use_q_layer:
-            self.schedule_soliton_loop_timer()
 
         # Failure injection state
         self._failed: bool = False
@@ -157,45 +105,35 @@ class AgentProtocol(IProtocol):
         # Broadcast sequence number
         self.agent_state_seq = 1
 
+        self.radial_controller = RadialDistanceController(
+            kp=K_R,
+            kd=K_DR,
+            radius_setpoint=ENCIRCLEMENT_RADIUS,
+        )
+        self.tangential_controller = TangentialSpacingController(
+            beta_u=BETA_U,
+            k_e_tau=K_E_TAU,
+            initial_u=0.0,
+        )
+
         # Control internal state (muscle)
         self.u: float = 0.0
         self.u_ss: float = 0.0
 
-        # Optional legacy fields kept only for backward compatibility in telemetry/plots.
-        # In the two-layer architecture (q -> u), KdV lives ONLY in q.
-        self.u_kdv: float = 0.0
-        self.u_nom: float = 0.0
-        self.u_err: float = 0.0
-
-        # Error-soliton state (KdV-like field)
-        self.q: float = 0.0
-        self.q_ss: float = 0.0
-        self.delta_q: float = 0.0
-        self.dq_steepen: float = 0.0
-        self.dq_disp: float = 0.0
-        self.dq_damp: float = 0.0
-        self.dq_force: float = 0.0
-
-        # Last spacing error values used for q forcing.
+        # Last spacing error values for telemetry and logging.
         self.last_e_tau: float = 0.0
         self.last_e_tau_eff: float = 0.0
 
         # Per-control-tick increments (dt_u * du) for analysis/telemetry.
         self.delta_u: float = 0.0
 
-        # NEW (v2) u-loop term telemetry (derivatives)
-        self.du_coupling: float = 0.0
-        self.du_diff: float = 0.0
+        # u-loop term telemetry (derivatives)
         self.du_damp: float = 0.0
-        self.du_nonlinear: float = 0.0
-        self.du_from_q: float = 0.0
         self.du_from_e_tau: float = 0.0
+
 
         # Last commanded velocity (world coordinates).
         self.desired_velocity: Tuple[float, float, float] = (0.0, 0.0, 0.0)
-
-        # Anti-windup per-tick flag (set in CONTROL loop, read in SOLITON loop)
-        self._aw_active: bool = False
 
         # Telemetry logging (in-memory)
         self._csv_path: Optional[str] = os.environ.get("AGENT_LOG_CSV_PATH")
@@ -219,19 +157,8 @@ class AgentProtocol(IProtocol):
         if FAILURE_ENABLE:
             self.schedule_failure_check_timer()
 
-            # --- Q-layer modulation state ---
-            self.q0 = 1.0
-            self.q0_rough = 1.0
-            self.q_mod = 0.0
-            self.q_mod_f = 0.0
-            self.m_robust = 0.0
-            self.m_robust_f = 0.0
-
     def schedule_control_loop_timer(self):
         self.provider.schedule_timer(CONTROL_LOOP_TIMER_STR, self.provider.current_time() + self.control_period)
-
-    def schedule_soliton_loop_timer(self):
-        self.provider.schedule_timer(SOLITON_LOOP_TIMER_STR, self.provider.current_time() + self.soliton_period)
 
     def schedule_failure_check_timer(self):
         self.provider.schedule_timer(
@@ -494,280 +421,17 @@ class AgentProtocol(IProtocol):
 
         return pred_gap, succ_gap
 
-    def _get_neighbor_values(self) -> Tuple[float, float, float, float, float, float, float, float]:
-        """Return neighbor u/q values with finite fallbacks."""
+    def _get_neighbor_values(self) -> Tuple[float, float]:
+        """Return neighbor u values with finite fallbacks."""
         u_pred = 0.0
         u_succ = 0.0
-        u_ss_pred = 0.0
-        u_ss_succ = 0.0
-        q_pred = 0.0
-        q_succ = 0.0
-        q_ss_pred = 0.0
-        q_ss_succ = 0.0
 
         if self.neighbor_pred_state is not None:
             u_pred = self._safe_float(self.neighbor_pred_state.u)
-            u_ss_pred = self._safe_float(getattr(self.neighbor_pred_state, "u_ss", 0.0))
-            q_pred = self._safe_float(getattr(self.neighbor_pred_state, "q", 0.0))
-            q_ss_pred = self._safe_float(getattr(self.neighbor_pred_state, "q_ss", 0.0))
         if self.neighbor_succ_state is not None:
             u_succ = self._safe_float(self.neighbor_succ_state.u)
-            u_ss_succ = self._safe_float(getattr(self.neighbor_succ_state, "u_ss", 0.0))
-            q_succ = self._safe_float(getattr(self.neighbor_succ_state, "q", 0.0))
-            q_ss_succ = self._safe_float(getattr(self.neighbor_succ_state, "q_ss", 0.0))
 
-        return u_pred, u_succ, u_ss_pred, u_ss_succ, q_pred, q_succ, q_ss_pred, q_ss_succ
-
-    def update_error_soliton_q(
-        self,
-        *,
-        q: float,
-        q_pred: float,
-        q_succ: float,
-        q_ss_pred: float = 0.0,
-        q_ss_succ: float = 0.0,
-        e_tau: float,
-        dt_q: float,
-    ) -> Tuple[float, float, float, dict]:
-        """Discrete-time update for q (error-soliton layer).
-
-        Two options (choose via KDV_TYPE in config_param.py):
-        - "ORIGINAL": central-form steepening term  (KdV-like, but can blow up under shocks)
-        - "BURGERS":  conservative nonlinear transport using a Rusanov flux (KdV-Burgers-like, shock-safe)
-
-        Model (dx=1):
-            q_t + a * d/dx (0.5*q^2) = nu*q_xx + kappa*q_xxx - beta*q - gamma*q^3 + K_E_TAU*e_tau
-
-        Notes:
-        - a      = K_U_STEEPEN (nonlinear transport strength)
-        - kappa  = KAPPA_U_DISP (dispersive, uses neighbor-provided q_ss to approximate q_xxx)
-        - beta   = BETA_Q
-        - gamma  = GAMMA_Q_CUBIC
-        - forcing uses K_E_TAU (same forcing you already had)
-        - nu (extra diffusion) is set to 0.0 by default (set in-code if needed)
-        """
-
-        # --------- safety: dt and inputs ----------
-        dt = self._safe_float(dt_q, 0.0)
-        if not (math.isfinite(dt) and dt > 0.0):
-            dt = 0.0
-
-        q = self._safe_float(q)
-        q_pred = self._safe_float(q_pred)
-        q_succ = self._safe_float(q_succ)
-        q_ss_pred = self._safe_float(q_ss_pred)
-        q_ss_succ = self._safe_float(q_ss_succ)
-        e_tau_f = self._safe_float(e_tau)
-
-        # Parameters
-        a = self._safe_float(K_U_STEEPEN)
-        kappa = self._safe_float(KAPPA_U_DISP)
-        beta = self._safe_float(BETA_Q)
-        gamma = self._safe_float(GAMMA_Q_CUBIC)
-        k_force = self._safe_float(K_E_TAU)
-
-        # Optional extra diffusion for stability (keep 0.0 to preserve your design)
-        nu_q = 0.0
-
-        kdv_type = str(KDV_TYPE).upper().strip()
-        # Allow some aliases that better describe what's implemented
-        if kdv_type in {"CONSERVATIVE", "CONSERVATIVE_FLUX", "RUSANOV", "GODUNOV"}:
-            kdv_type = "BURGERS"
-
-        def _rhs(q_local: float) -> Tuple[float, dict]:
-            ql = self._safe_float(q_local)
-
-            # 1-hop second derivative (curvature) at current q (for RHS evaluation)
-            q_ss_local = float(q_succ - 2.0 * ql + q_pred)
-
-            # neighbor-provided curvature values -> approximate 3rd derivative (1-hop)
-            q_sss = float(q_ss_succ - q_ss_pred)
-
-            # --- transport / steepening ---
-            dq_adv = 0.0
-            terms_flux = {}
-
-            if kdv_type == "BURGERS":
-                # Conservative nonlinear flux for Burgers-like transport:
-                # f(q)=0.5*q^2, dq_adv = -a*(F_{i+1/2} - F_{i-1/2})  with Rusanov flux
-                def f(x: float) -> float:
-                    return 0.5 * x * x
-
-                alpha_p = max(abs(ql), abs(q_succ))
-                if not math.isfinite(alpha_p):
-                    alpha_p = 0.0
-                F_p = 0.5 * (f(ql) + f(q_succ)) - 0.5 * alpha_p * (q_succ - ql)
-
-                alpha_m = max(abs(q_pred), abs(ql))
-                if not math.isfinite(alpha_m):
-                    alpha_m = 0.0
-                F_m = 0.5 * (f(q_pred) + f(ql)) - 0.5 * alpha_m * (ql - q_pred)
-
-                dq_adv = float(-a * (F_p - F_m))
-                terms_flux = {"F_p": F_p, "F_m": F_m, "alpha_p": alpha_p, "alpha_m": alpha_m}
-            else:
-                # ORIGINAL: central steepening term (classic discretization you had)
-                q_s = float(q_succ - q_pred)
-                dq_adv = float(-a * ql * q_s)
-                terms_flux = {"q_s": q_s}
-
-            # Linear diffusion (optional)
-            dq_diff = float(nu_q * q_ss_local)
-
-            # Dispersive term (KdV-like)
-            dq_disp = float(kappa * q_sss)
-
-            # Damping (linear)
-            dq_damp = float(-beta * ql)
-
-            # Damping (cubic) - compute safely only if gamma != 0
-            if gamma != 0.0:
-                if abs(ql) > 5.0e102:
-                    dq_damp_cubic = float(-gamma * math.copysign(1.0, ql) * 1.0e308)
-                else:
-                    dq_damp_cubic = float(-gamma * (ql * ql * ql))
-            else:
-                dq_damp_cubic = 0.0
-
-            # Forcing by spacing error
-            dq_force = float(k_force * e_tau_f)
-
-            dq_total = float(dq_adv + dq_diff + dq_disp + dq_damp + dq_damp_cubic + dq_force)
-
-            terms = {
-                "kdv_type": kdv_type,
-                "q_ss": q_ss_local,
-                "q_sss": q_sss,
-                "dq_adv": dq_adv,
-                "dq_diff": dq_diff,
-                "dq_disp": dq_disp,
-                "dq_damp": dq_damp,
-                "dq_damp_cubic": dq_damp_cubic,
-                "dq_force": dq_force,
-            }
-            terms.update(terms_flux)
-            return dq_total, terms
-
-        if dt <= 0.0:
-            dq0, terms0 = _rhs(q)
-            q_ss_out = float(q_succ - 2.0 * q + q_pred)
-            return float(q), float(q_ss_out), float(dq0), terms0
-
-        # --------- CFL-style substepping (only critical for BURGERS) ----------
-        n_sub = 1
-        if kdv_type == "BURGERS" and a != 0.0:
-            q_max = max(abs(q), abs(q_pred), abs(q_succ))
-            if not math.isfinite(q_max):
-                q_max = 0.0
-            if q_max > 0.0:
-                cfl = dt * abs(a) * q_max  # dx=1
-                if cfl > 0.35:
-                    n_sub = int(math.ceil(cfl / 0.35))
-                    n_sub = max(1, min(n_sub, 10))
-
-        dt_sub = dt / float(n_sub)
-
-        q_curr = float(q)
-        dq_last = 0.0
-        terms_last: dict = {}
-        for _ in range(n_sub):
-            dq_last, terms_last = _rhs(q_curr)
-            if not math.isfinite(dq_last):
-                dq_last = 0.0
-            q_next = float(q_curr + dt_sub * dq_last)
-            if not math.isfinite(q_next):
-                q_next = 0.0
-            q_curr = q_next
-
-        q_next = float(q_curr)
-
-        # Standardize: curvature at updated q
-        q_ss_out = float(q_succ - 2.0 * q_next + q_pred)
-        if not math.isfinite(q_ss_out):
-            q_ss_out = 0.0
-
-        dq_out = float(dq_last)
-        if not math.isfinite(dq_out):
-            dq_out = 0.0
-
-        # Compatibility/debug keys (old plots)
-        terms_debug = dict(terms_last)
-        terms_debug["dq_steepen"] = float(terms_last.get("dq_adv", 0.0))
-        if "q_s" not in terms_debug:
-            terms_debug["q_s"] = float(q_succ - q_pred)
-
-        if not (math.isfinite(q_next) and math.isfinite(q_ss_out) and math.isfinite(dq_out)):
-            return 0.0, 0.0, 0.0, {k: 0.0 for k in terms_debug}
-
-        return q_next, q_ss_out, dq_out, terms_debug
-
-    def update_control_u(
-            self,
-            *,
-            u: float,
-            u_pred: float,
-            u_succ: float,
-            q: float,
-            e_tau: Optional[float] = None,
-            dt_u: float,
-            k_e_tau_override: Optional[float] = None,
-            k_q_to_u_override: Optional[float] = None,
-            kappa_u_diff_override: Optional[float] = None,
-            beta_u_override: Optional[float] = None,
-        ) -> Tuple[float, float, float, dict]:
-            """Discrete-time control update for u (muscle), forced by q or directly by e_tau."""
-            dt = float(dt_u)
-            if not (math.isfinite(dt) and dt > 0.0):
-                dt = 0.0
-
-            u = self._safe_float(u)
-            u_pred = self._safe_float(u_pred)
-            u_succ = self._safe_float(u_succ)
-            q_f = self._safe_float(q)
-
-            if USE_SOFT_LIMITER_U and math.isfinite(U_lim) and U_lim > 0.0:
-                u_abs = abs(u)
-                u3 = u * u * u
-                nonlinear = u3 / (1.0 + (u_abs / U_lim) * (u_abs / U_lim))
-            else:
-                nonlinear = u * u * u
-
-            u_s = float(u_succ - u_pred)
-            u_ss = float(u_succ - 2.0 * u + u_pred)
-
-            # Use overrides if provided; otherwise use effective gains (which may be modulated by q-layer)
-            beta_u = float(beta_u_override) if (beta_u_override is not None) else float(self.beta_u_eff)
-            kappa_u = float(kappa_u_diff_override) if (kappa_u_diff_override is not None) else float(self.kappa_u_diff_eff)
-            k_q_to_u = float(k_q_to_u_override) if (k_q_to_u_override is not None) else float(self.k_q_to_u_eff)
-            k_e_tau = float(k_e_tau_override) if (k_e_tau_override is not None) else float(self.k_e_tau_eff)
-
-            du_coupling = float(C_COUPLING * u_s)
-            du_damp = float(-beta_u * u)
-            du_nonlinear = float(-ALPHA_U * nonlinear)
-            du_diff = float(kappa_u * u_ss)
-
-            du_from_q = float(k_q_to_u * q_f)
-            du_from_e_tau = 0.0
-            if e_tau is not None:
-                du_from_e_tau = float(k_e_tau * self._safe_float(e_tau))
-
-
-            du = float(du_coupling + du_damp + du_nonlinear + du_diff + du_from_q + du_from_e_tau)
-            u_next = float(u + dt * du)
-
-            terms_debug = {
-                "du_coupling": du_coupling,
-                "du_damp": du_damp,
-                "du_nonlinear": du_nonlinear,
-                "du_diff": du_diff,
-                "du_from_q": du_from_q,
-                "du_from_e_tau": du_from_e_tau,
-            }
-
-            if not (math.isfinite(u_next) and math.isfinite(u_ss) and math.isfinite(du)):
-                return 0.0, 0.0, 0.0, {key: 0.0 for key in terms_debug}
-
-            return u_next, u_ss, du, terms_debug
+        return u_pred, u_succ
 
     def compute_tangential_velocity(
         self,
@@ -776,11 +440,10 @@ class AgentProtocol(IProtocol):
         *,
         r_eff: float = 1.0,
     ) -> Tuple[float, float, float]:
-        """Convert internal u into tangential velocity (XYZ), usando k_tau_eff modulado se disponível."""
+        """Convert internal u into tangential velocity (XYZ)."""
         if not math.isfinite(r_eff) or r_eff <= 0.0:
             r_eff = 1.0
-        k_tau = getattr(self, "k_tau_eff", float(K_TAU))
-        v_tau_corr = k_tau * u * r_eff
+        v_tau_corr = float(K_TAU) * u * r_eff
         return (v_tau_corr * t_hat[0], v_tau_corr * t_hat[1], 0.0)
 
     @staticmethod
@@ -813,19 +476,6 @@ class AgentProtocol(IProtocol):
             vz = math.copysign(VM_MAX_SPEED_Z, vz)
 
         return (vx, vy, vz)
-
-    @staticmethod
-    def _would_saturate(v: Tuple[float, float, float]) -> bool:
-        """Check whether velocity exceeds configured limits (pre-clamp)."""
-        vx, vy, vz = v
-        if not (math.isfinite(vx) and math.isfinite(vy) and math.isfinite(vz)):
-            return False
-        v_xy = math.hypot(vx, vy)
-        if math.isfinite(VM_MAX_SPEED_XY) and VM_MAX_SPEED_XY > 0.0 and v_xy > VM_MAX_SPEED_XY:
-            return True
-        if math.isfinite(VM_MAX_SPEED_Z) and VM_MAX_SPEED_Z > 0.0 and abs(vz) > VM_MAX_SPEED_Z:
-            return True
-        return False
 
     def get_two_neighbors(
         self, now: float, own_position
@@ -944,7 +594,6 @@ class AgentProtocol(IProtocol):
                         pass
 
                 self.provider.cancel_timer(CONTROL_LOOP_TIMER_STR)
-                self.provider.cancel_timer(SOLITON_LOOP_TIMER_STR)
 
                 if self.velocity_handler is not None:
                     try:
@@ -974,99 +623,9 @@ class AgentProtocol(IProtocol):
                     pass
 
             self.schedule_control_loop_timer()
-            if self.use_q_layer:
-                self.schedule_soliton_loop_timer()
             self.schedule_failure_check_timer()
             if SIM_DEBUG:
                 print(f"Agent {self.node_id} RECOVERED from FAILURE")
-            return
-
-        if timer == SOLITON_LOOP_TIMER_STR:
-            if not self.use_q_layer:
-                return
-            if self._failed:
-                return
-
-            if self.velocity_handler:
-                position = self.velocity_handler.get_node_position(self.node_id)
-            else:
-                position = (0.0, 0.0, 0.0)
-
-            now = self.provider.current_time()
-            pred_gap, succ_gap = self._refresh_neighbors(now, position)
-            (
-                _u_pred,
-                _u_succ,
-                _u_ss_pred,
-                _u_ss_succ,
-                q_pred,
-                q_succ,
-                q_ss_pred,
-                q_ss_succ,
-            ) = self._get_neighbor_values()
-
-            t_hat = None
-            r_eff = None
-            if math.isfinite(K_OMEGA_DAMP) and K_OMEGA_DAMP > 0.0 and self.target_state is not None:
-                target_state, _ = self.target_state
-                t_hat = self.compute_tangential_unit_vector(target_state.position, position)
-                r_xy = math.hypot(position[0] - target_state.position[0], position[1] - target_state.position[1])
-                r_min = float(R_MIN)
-                if not (math.isfinite(r_min) and r_min > 0.0):
-                    r_min = 1e-6
-                if math.isfinite(r_xy):
-                    r_eff = max(r_xy, r_min)
-                else:
-                    r_eff = r_min
-
-            e_tau, e_tau_eff, e_tau_used = self.compute_e_tau_used(
-                pred_gap=pred_gap,
-                succ_gap=succ_gap,
-                t_hat=t_hat,
-                r_eff=r_eff,
-            )
-
-            # Store "raw" errors for telemetry (even if we later zero e_tau_used for anti-windup)
-            self.last_e_tau = float(e_tau) if math.isfinite(e_tau) else 0.0
-            self.last_e_tau_eff = float(e_tau_eff) if math.isfinite(e_tau_eff) else self.last_e_tau
-
-            # ----------------------------------------------------------------------------------
-            # Anti-windup for q: if CONTROL loop saturated recently, drop forcing dq_force (e_tau_used -> 0)
-            # ----------------------------------------------------------------------------------
-            if bool(ANTI_WINDUP_ENABLE) and bool(getattr(self, "_aw_active", False)):
-                e_tau_used = 0.0
-
-            dt_q = float(self.soliton_period)
-            q_next, q_ss_local, dq, terms = self.update_error_soliton_q(
-                q=self.q,
-                q_pred=q_pred,
-                q_succ=q_succ,
-                q_ss_pred=q_ss_pred,
-                q_ss_succ=q_ss_succ,
-                e_tau=e_tau_used,
-                dt_q=dt_q,
-            )
-
-            if self.neighbor_pred_state is None or self.neighbor_succ_state is None:
-                q_ss_local = 0.0
-
-            self.q = float(q_next)
-            self.q_ss = float(q_ss_local) if math.isfinite(q_ss_local) else 0.0
-            self.delta_q = float(dt_q * dq) if math.isfinite(dq) else 0.0
-            self.dq_steepen = self._safe_float(terms.get("dq_steepen", 0.0))
-            self.dq_disp = self._safe_float(terms.get("dq_disp", 0.0))
-            self.dq_damp = self._safe_float(terms.get("dq_damp", 0.0))
-            self.dq_force = self._safe_float(terms.get("dq_force", 0.0))
-
-            if SIM_DEBUG:
-                q_s_dbg = self._safe_float(terms.get("q_s", 0.0))
-                q_sss_dbg = self._safe_float(terms.get("q_sss", 0.0))
-                print(
-                    f"Agent {self.node_id} q-loop: e_tau={e_tau:.3f}, e_tau_eff={e_tau_eff:.3f}, "
-                    f"q={self.q:.3f}, q_s={q_s_dbg:.3f}, q_sss={q_sss_dbg:.3f}, delta_q={self.delta_q:.3f}"
-                )
-
-            self.schedule_soliton_loop_timer()
             return
 
         if timer == CONTROL_LOOP_TIMER_STR:
@@ -1084,16 +643,7 @@ class AgentProtocol(IProtocol):
             # 2) Neighbor calculations
             now = self.provider.current_time()
             pred_gap, succ_gap = self._refresh_neighbors(now, position)
-            (
-                u_pred,
-                u_succ,
-                _u_ss_pred,
-                _u_ss_succ,
-                _q_pred,
-                _q_succ,
-                _q_ss_pred,
-                _q_ss_succ,
-            ) = self._get_neighbor_values()
+            u_pred, u_succ = self._get_neighbor_values()
 
             # 3) Radial Control loop
             v_rad: Tuple[float, float, float] = (0.0, 0.0, 0.0)
@@ -1106,17 +656,13 @@ class AgentProtocol(IProtocol):
             if self.velocity_handler is not None and self.target_state is not None:
                 target_state, _ = self.target_state
                 p_t = target_state.position
-                v_t = target_state.velocity
 
                 r_vec = (position[0] - p_t[0], position[1] - p_t[1])
                 e_r, r = self._unit2(r_vec, eps=1e-6)
-
-                e = r - ENCIRCLEMENT_RADIUS
-
-                v_rel_xy = (velocity[0] - v_t[0], velocity[1] - v_t[1])
-                v_r = self._dot2(v_rel_xy, e_r)
-
-                v_r_corr = -K_R * e - K_DR * v_r
+                v_r_corr = self.radial_controller.update(
+                    measurement=r,
+                    dt=float(self.control_period),
+                )
 
                 v_rad_xy = (v_r_corr * e_r[0], v_r_corr * e_r[1])
                 v_rad_z = 0.0
@@ -1129,9 +675,11 @@ class AgentProtocol(IProtocol):
 
                 if SIM_DEBUG:
                     print(
-                        f"Agent {self.node_id} radial: r={r:.3f}, e={e:.3f}, "
-                        f"v_r={v_r:.3f}, v_r_corr={v_r_corr:.3f}, v_rad={v_rad}"
+                        f"Agent {self.node_id} radial: r={r:.3f}, "
+                        f"v_r_corr={v_r_corr:.3f}, v_rad={v_rad}"
                     )
+            else:
+                self.radial_controller.reset()
 
             # 4) Tangential control
             v_tau: Tuple[float, float, float] = (0.0, 0.0, 0.0)
@@ -1151,74 +699,19 @@ class AgentProtocol(IProtocol):
                 else:
                     r_eff = r_min
 
-                e_tau_used = None
-                if not self.use_q_layer:
-                    e_tau, e_tau_eff, e_tau_used = self.compute_e_tau_used(
-                        pred_gap=pred_gap,
-                        succ_gap=succ_gap,
-                        t_hat=t_hat,
-                        r_eff=r_eff,
-                    )
-                    self.last_e_tau = float(e_tau) if math.isfinite(e_tau) else 0.0
-                    self.last_e_tau_eff = float(e_tau_eff) if math.isfinite(e_tau_eff) else self.last_e_tau
-
-                # Q-layer: update modulation signals and choose how u is driven
-                if self.use_q_layer:
-                    # Use previous saturation flag to optionally freeze/zero modulation
-                    self._update_q_modulators(abs_q=abs(self.q), abs_q_ss=abs(self.q_ss), freeze=bool(self._aw_active))
-                    self._compute_effective_params()
-
-                    if self.q_layer_arch == "MODULATE_K_Q_TO_U":
-                        # Legacy architecture: u uses e_tau with a q-modulated K_E_TAU
-                        e_tau_used = float(self.last_e_tau_eff)
-                    else:
-                        # FORCE_U / MODULATE_PARAMS: u is driven by q (no direct e_tau)
-                        e_tau_used = None
-                else:
-                    # No q layer: reset effective params (no modulation)
-                    self._compute_effective_params()
-
-                dt_u = float(self.control_period)
-
-                # --- First pass: compute u candidate with full injection (as usual) ---
-                u_prev = float(self.u)
-                # Select q input and per-parameter overrides depending on architecture
-                q_for_u = 0.0
-                u_overrides: dict = {}
-                # if self.use_q_layer:
-                #     if self.q_layer_arch == "MODULATE_K_Q_TO_U":
-                #         q_for_u = float(self.q)
-                #         u_overrides["k_q_to_u_override"] = self.k_q_to_u_eff
-                #     else:
-                #         q_for_u = 0.0
-                #         if self.q_layer_arch == "MODULATE_PARAMS":
-                #             u_overrides["k_e_tau_override"] = self.k_e_tau_eff
-                if self.use_q_layer:
-
-                    arch = str(self.q_layer_arch).upper().strip()
-
-                    if arch == "FORCE_E":
-                        q_for_u = 0.0
-                        e_tau_used = float(self.last_e_tau_eff)
-                        # Não modula nenhum ganho, usa apenas os valores default
-                    elif arch in ("FORCE_U", "MODULATE_PARAMS", "MODULATE_K_Q_TO_U"):
-                        q_for_u = float(self.q)
-
-                    if arch == "MODULATE_K_Q_TO_U":
-                        u_overrides["k_q_to_u_override"] = float(self.k_q_to_u_eff)
-
-                u_next_full, _u_ss_local, du_full, u_terms = self.update_control_u(
-                    u=u_prev,
-                    u_pred=u_pred,
-                    u_succ=u_succ,
-                    q=q_for_u,
-                    e_tau=e_tau_used,
-                    dt_u=dt_u,
-                    **u_overrides,
+                e_tau, e_tau_eff, e_tau_used = self.compute_e_tau_used(
+                    pred_gap=pred_gap,
+                    succ_gap=succ_gap,
+                    t_hat=t_hat,
+                    r_eff=r_eff,
                 )
+                self.last_e_tau = float(e_tau) if math.isfinite(e_tau) else 0.0
+                self.last_e_tau_eff = float(e_tau_eff) if math.isfinite(e_tau_eff) else self.last_e_tau
 
-                # Candidate tangential velocity using full u
-                v_tau_full = self.compute_tangential_velocity(u_next_full, t_hat, r_eff=r_eff)
+                tangential_output = self.tangential_controller.update(
+                    measurement=float(e_tau_used),
+                    dt=float(self.control_period),
+                )
 
                 # Spin term (unchanged)
                 omega_ref_target = getattr(target_state, "omega_ref", 0.0)
@@ -1231,75 +724,20 @@ class AgentProtocol(IProtocol):
                     v_spin_xy = omega_ref_target * r_xy
                     v_spin = (v_spin_xy * t_hat[0], v_spin_xy * t_hat[1], 0.0)
 
-                # Compose PRE-CLAMP command candidate
-                v_cmd_base_full = self.compose_final_velocity(v_rad, v_tau_full, v_target)
-                v_cmd_candidate = (
-                    v_cmd_base_full[0] + v_spin[0],
-                    v_cmd_base_full[1] + v_spin[1],
-                    v_cmd_base_full[2] + v_spin[2],
-                )
-
-                # Detect saturation (pre-clamp)
-                did_sat = self._would_saturate(v_cmd_candidate)
-
-                # Store aw flag for use by q-loop
-                self._aw_active = bool(ANTI_WINDUP_ENABLE) and bool(did_sat)
-
-                # --- Anti-windup action for u: if saturated, drop injection terms and re-integrate ---
-                if self._aw_active:
-                    du_coupling = self._safe_float(u_terms.get("du_coupling", 0.0))
-                    du_diff = self._safe_float(u_terms.get("du_diff", 0.0))
-                    du_damp = self._safe_float(u_terms.get("du_damp", 0.0))
-                    du_nonlinear = self._safe_float(u_terms.get("du_nonlinear", 0.0))
-
-                    du_aw = float(du_coupling + du_diff + du_damp + du_nonlinear)
-                    u_next = float(u_prev + dt_u * du_aw)
-
-                    # Telemetry terms: injection does not contribute in AW tick
-                    self.du_coupling = du_coupling
-                    self.du_diff = du_diff
-                    self.du_damp = du_damp
-                    self.du_nonlinear = du_nonlinear
-                    self.du_from_q = 0.0
-                    self.du_from_e_tau = 0.0
-
-                    self.delta_u = float(dt_u * du_aw) if math.isfinite(du_aw) else 0.0
-                    self.u = float(u_next) if math.isfinite(u_next) else 0.0
-
-                else:
-                    # Normal update: accept full u_next
-                    self.du_coupling = self._safe_float(u_terms.get("du_coupling", 0.0))
-                    self.du_diff = self._safe_float(u_terms.get("du_diff", 0.0))
-                    self.du_damp = self._safe_float(u_terms.get("du_damp", 0.0))
-                    self.du_nonlinear = self._safe_float(u_terms.get("du_nonlinear", 0.0))
-                    self.du_from_q = self._safe_float(u_terms.get("du_from_q", 0.0))
-                    self.du_from_e_tau = self._safe_float(u_terms.get("du_from_e_tau", 0.0))
-
-                    self.delta_u = float(dt_u * du_full) if math.isfinite(du_full) else 0.0
-                    self.u = float(u_next_full)
-
-                if not math.isfinite(self.u) or not math.isfinite(self.delta_u):
-                    self.u = 0.0
-                    self.delta_u = 0.0
-                    self.du_coupling = self.du_diff = self.du_damp = self.du_nonlinear = 0.0
-                    self.du_from_q = self.du_from_e_tau = 0.0
-
-                # Legacy fields (compatibility only): KdV is NOT in u in v2.
-                self.u_kdv = 0.0
-                self.u_nom = float(self.u)
-                self.u_err = 0.0
+                self.du_damp = self._safe_float(tangential_output.du_damp)
+                self.du_from_e_tau = self._safe_float(tangential_output.du_from_error)
+                self.delta_u = self._safe_float(tangential_output.delta_u)
+                self.u = self._safe_float(tangential_output.u)
 
                 # Final v_tau using the (possibly anti-windup adjusted) self.u
                 v_tau = self.compute_tangential_velocity(self.u, t_hat, r_eff=r_eff)
 
                 if SIM_DEBUG:
-                    u_s_dbg = float(u_succ - u_pred)
-                    aw_str = "AW=1" if self._aw_active else "AW=0"
                     print(
-                        f"Agent {self.node_id} tangential: {aw_str}, e_tau={self.last_e_tau:.3f}, "
+                        f"Agent {self.node_id} tangential: e_tau={self.last_e_tau:.3f}, "
                         f"e_tau_eff={self.last_e_tau_eff:.3f}, "
                         f"u_pred={u_pred:.3f}, u_succ={u_succ:.3f}, u={self.u:.3f}, "
-                        f"q={self.q:.3f}, u_s={u_s_dbg:.3f}, delta_u={self.delta_u:.3f}, v_tau={v_tau}"
+                        f"delta_u={self.delta_u:.3f}, v_tau={v_tau}"
                     )
 
             # Compute local discrete curvature u_ss (1-hop).
@@ -1318,8 +756,6 @@ class AgentProtocol(IProtocol):
                 velocity=velocity,
                 u=self.u,
                 u_ss=self.u_ss,
-                q=self.q,
-                q_ss=self.q_ss,
             )
             message_json = agent_state.to_json()
             command = CommunicationCommand(CommunicationCommandType.BROADCAST, message_json)
@@ -1328,8 +764,7 @@ class AgentProtocol(IProtocol):
             if SIM_DEBUG:
                 print(
                     f"Agent {self.node_id} broadcasted AgentState "
-                    f"seq={seq}, position={position}, velocity={velocity}, u={self.u}, u_ss={self.u_ss}, "
-                    f"q={self.q}, q_ss={self.q_ss}"
+                    f"seq={seq}, position={position}, velocity={velocity}, u={self.u}, u_ss={self.u_ss}"
                 )
 
             self.agent_state_seq = seq + 1
@@ -1425,8 +860,7 @@ class AgentProtocol(IProtocol):
                 print(
                     f"Agent {self.node_id} received AgentState "
                     f"rxtime={rxtime:.3f}, seq={state.seq}, agent_id={state.agent_id}, position={state.position}, "
-                    f"velocity={state.velocity}, u={state.u}, u_ss={getattr(state, 'u_ss', 0.0)}, "
-                    f"q={getattr(state, 'q', 0.0)}, q_ss={getattr(state, 'q_ss', 0.0)}"
+                    f"velocity={state.velocity}, u={state.u}, u_ss={getattr(state, 'u_ss', 0.0)}"
                 )
 
             if state.agent_id != self.node_id:
@@ -1455,34 +889,15 @@ class AgentProtocol(IProtocol):
 
                 # dt for correct reconstruction of increments
                 "dt_u": float(self.control_period),
-                "dt_q": float(self.soliton_period),
 
                 # muscle state
                 "u": float(self.u),
                 "u_ss": float(self.u_ss),
 
-                # legacy placeholders (compatibility)
-                "u_kdv": float(self.u_kdv),
-                "u_nom": float(self.u_nom),
-                "u_err": float(self.u_err),
-
                 # muscle per-tick / per-step terms
                 "delta_u": float(self.delta_u),
-                "du_coupling": float(self.du_coupling),
-                "du_diff": float(self.du_diff),
                 "du_damp": float(self.du_damp),
-                "du_nonlinear": float(self.du_nonlinear),
-                "du_from_q": float(self.du_from_q),
                 "du_from_e_tau": float(self.du_from_e_tau),
-
-                # KdV field
-                "q": float(self.q),
-                "q_ss": float(self.q_ss),
-                "delta_q": float(self.delta_q),
-                "dq_steepen": float(self.dq_steepen),
-                "dq_disp": float(self.dq_disp),
-                "dq_damp": float(self.dq_damp),
-                "dq_force": float(self.dq_force),
 
                 # spacing error
                 "e_tau": float(self.last_e_tau),
@@ -1508,139 +923,6 @@ class AgentProtocol(IProtocol):
                 exc,
                 self._csv_path,
             )
-
-    # -------------------------------------------------------------------------
-    # Helpers: numerical safety + q-driven modulation signals
-    # -------------------------------------------------------------------------
-    @staticmethod
-    def _safe_float(x: float, default: float = 0.0) -> float:
-        """Return float(x) if finite, else default."""
-        try:
-            xf = float(x)
-        except Exception:
-            return float(default)
-        return xf if math.isfinite(xf) else float(default)
-
-    @staticmethod
-    def _clamp(x: float, lo: float, hi: float) -> float:
-        if x < lo:
-            return lo
-        if x > hi:
-            return hi
-        return x
-
-    @staticmethod
-    def _clamp01(x: float) -> float:
-        return AgentProtocol._clamp(float(x), 0.0, 1.0)
-
-    def _map_to_unit(self, z: float, *, use_tanh: bool, tanh_gain: float) -> float:
-        """Map z>=0 to m in [0,1]."""
-        zf = self._safe_float(z, 0.0)
-        if zf < 0.0:
-            zf = 0.0
-        if use_tanh:
-            g = self._safe_float(tanh_gain, 1.0)
-            return self._clamp01(math.tanh(g * zf))
-        # linear clip
-        return self._clamp01(zf)
-
-    def _update_q_modulators(self, *, abs_q: float, abs_q_ss: float, freeze: bool) -> None:
-        """Update (q_mod_f, m_robust_f) from |q| and |q_ss| with scale tracking + low-pass filtering."""
-        if freeze and Q_MOD_FREEZE_ON_SAT:
-            # Freeze/zero to avoid gain run-away while saturated.
-            self.q_mod = 0.0
-            self.q_mod_f = 0.0
-            self.m_robust = 0.0
-            self.m_robust_f = 0.0
-            return
-
-        # --- scale tracking for |q| ---
-        a_q = self._safe_float(abs_q, 0.0)
-        mu = self._clamp01(self._safe_float(Q_MOD_MU, 0.0))
-        # Update q0 as EMA of |q|
-        self.q0 = (1.0 - mu) * self.q0 + mu * a_q
-        if not math.isfinite(self.q0) or self.q0 < Q_MOD_EPS:
-            self.q0 = 1.0
-
-        z = a_q / (self.q0 + Q_MOD_EPS)
-        self.q_mod = self._map_to_unit(z, use_tanh=bool(Q_MOD_USE_TANH), tanh_gain=float(Q_MOD_TANH_GAIN))
-        nu = self._clamp01(self._safe_float(Q_MOD_NU, 0.0))
-        self.q_mod_f = (1.0 - nu) * self.q_mod_f + nu * self.q_mod
-
-        # --- scale tracking for |q_ss| (roughness) ---
-        a_qss = self._safe_float(abs_q_ss, 0.0)
-        mu_r = self._clamp01(self._safe_float(Q_ROUGH_MU, 0.0))
-        self.q0_rough = (1.0 - mu_r) * self.q0_rough + mu_r * a_qss
-        if not math.isfinite(self.q0_rough) or self.q0_rough < Q_ROUGH_EPS:
-            self.q0_rough = 1.0
-
-        z_r = a_qss / (self.q0_rough + Q_ROUGH_EPS)
-        self.m_robust = self._map_to_unit(z_r, use_tanh=bool(Q_ROUGH_USE_TANH), tanh_gain=float(Q_ROUGH_TANH_GAIN))
-        nu_r = self._clamp01(self._safe_float(Q_ROUGH_NU, 0.0))
-        self.m_robust_f = (1.0 - nu_r) * self.m_robust_f + nu_r * self.m_robust
-
-        # Safety: keep in bounds
-        self.q_mod_f = self._clamp01(self.q_mod_f)
-        self.m_robust_f = self._clamp01(self.m_robust_f)
-
-    def _compute_effective_params(self) -> None:
-        """Compute effective gains according to Q layer architecture."""
-        # Defaults (no modulation)
-        self.k_e_tau_eff = float(K_E_TAU)
-        self.k_q_to_u_eff = float(K_Q_TO_U)
-        self.kappa_u_diff_eff = float(KAPPA_U_DIFF)
-        self.beta_u_eff = float(BETA_U)
-        self.k_tau_eff = float(K_TAU)
-
-        if not self.use_q_layer:
-            return
-
-        arch = str(self.q_layer_arch).upper().strip()
-
-        if arch == "FORCE_E":
-            # Não modula nenhum ganho, usa apenas os valores default
-            self.k_tau_eff = float(K_TAU)
-            self.kappa_u_diff_eff = float(KAPPA_U_DIFF)
-            self.beta_u_eff = float(BETA_U)
-            self.k_q_to_u_eff = float(K_Q_TO_U)
-            return
-
-        if arch == "MODULATE_K_Q_TO_U":
-            # Agora: boost K_Q_TO_U based on q_mod_f
-            base_kq = float(K_Q_TO_U)
-            delta = self._safe_float(Q_PARAM_ACC_DELTA, 0.0)
-            if bool(Q_PARAM_ACC_BIDIR):
-                factor = 1.0 + delta * (2.0 * float(self.q_mod_f) - 1.0)
-            else:
-                factor = 1.0 + delta * float(self.q_mod_f)
-
-            factor = self._clamp(factor, float(Q_PARAM_ACC_MIN_FACTOR), float(Q_PARAM_ACC_MAX_FACTOR))
-            self.k_q_to_u_eff = base_kq * factor
-            return
-
-        if arch == "MODULATE_PARAMS":
-            # Modulação de K_TAU (aceleração)
-            base_ktau = float(K_TAU)
-            delta = self._safe_float(Q_PARAM_ACC_DELTA, 0.0)
-            if bool(Q_PARAM_ACC_BIDIR):
-                factor = 1.0 + delta * (2.0 * float(self.q_mod_f) - 1.0)
-            else:
-                factor = 1.0 + delta * float(self.q_mod_f)
-            factor = self._clamp(factor, float(Q_PARAM_ACC_MIN_FACTOR), float(Q_PARAM_ACC_MAX_FACTOR))
-            self.k_tau_eff = base_ktau * factor
-
-            # Modulação de KAPPA_U_DIFF (robustez/difusão)
-            base_kappa = float(KAPPA_U_DIFF)
-            add = self._safe_float(Q_PARAM_DIFF_ADD, 0.0) * float(self.m_robust_f)
-            mult = 1.0 + self._safe_float(Q_PARAM_DIFF_DELTA, 0.0) * float(self.m_robust_f)
-            self.kappa_u_diff_eff = (base_kappa + add) * mult
-
-            # Modulação de BETA_U (robustez/damping)
-            base_beta = float(BETA_U)
-            add_b = self._safe_float(Q_PARAM_BETA_ADD, 0.0) * float(self.m_robust_f)
-            mult_b = 1.0 + self._safe_float(Q_PARAM_BETA_DELTA, 0.0) * float(self.m_robust_f)
-            self.beta_u_eff = (base_beta + add_b) * mult_b
-            return
 
 
 
