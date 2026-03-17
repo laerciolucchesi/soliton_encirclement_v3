@@ -87,7 +87,7 @@ class TestAccelerationLimits:
             v_cur, v_des, dt=0.1, max_acc_xy=2.0, max_acc_z=1.0
         )
         
-        # Maximum allowed change is 2.0 m/s² * 0.1 s = 0.2 m/s
+        # Maximum allowed change is 2.0 m/s^2 * 0.1 s = 0.2 m/s
         vx, vy, vz = v_new
         change_norm = math.sqrt(vx**2 + vy**2)
         assert change_norm == pytest.approx(0.2)
@@ -104,7 +104,7 @@ class TestAccelerationLimits:
             v_cur, v_des, dt=0.1, max_acc_xy=2.0, max_acc_z=1.0
         )
         
-        # Maximum allowed change is 1.0 m/s² * 0.1 s = 0.1 m/s
+        # Maximum allowed change is 1.0 m/s^2 * 0.1 s = 0.1 m/s
         assert v_new == pytest.approx((0.0, 0.0, 0.1))
     
     def test_vertical_acceleration_limiting_negative(self):
@@ -115,7 +115,7 @@ class TestAccelerationLimits:
             v_cur, v_des, dt=0.1, max_acc_xy=2.0, max_acc_z=1.0
         )
         
-        # Maximum allowed change is 1.0 m/s² * 0.1 s = 0.1 m/s
+        # Maximum allowed change is 1.0 m/s^2 * 0.1 s = 0.1 m/s
         assert v_new == pytest.approx((0.0, 0.0, 4.9))
     
     def test_both_axes_acceleration_limiting(self):

@@ -1,7 +1,6 @@
 # Soliton Encirclement
-# Baseline v1 (before v2 refactor)
 
-Soliton-inspired swarm encirclement experiment for the
+Swarm encirclement experiment for the
 [GrADyS-SIM NG](https://github.com/Project-GrADyS/gradys-sim-nextgen) simulator.
 
 The main focus of this repository is the end-to-end encirclement simulation:
@@ -43,15 +42,15 @@ Most parameters are in [config_param.py](config_param.py) (simulation duration, 
 The simulation writes files next to where you run it:
 
 - `agent_telemetry.csv` (written by agents on `finish()`)
-    - Columns: `node_id,timestamp,u,velocity_norm`
+    - Columns: `node_id,timestamp,dt_u,u,u_ss,delta_u,du_damp,du_from_e_tau,e_tau,e_tau_eff,velocity_norm`
 - `target_telemetry.csv` (written by the target on `finish()`)
-    - Columns: `timestamp,global_radial_error,global_tangential_error`
-- `target_telemetry_radial_error.png`, `target_telemetry_tangential_error.png`
+    - Columns: `timestamp,E_r,E_vr,rho,G_max,E_gap`
+- `metric_E_r.png`, `metric_E_vr.png`, `metric_rho.png`, `metric_G_max.png`, `metric_E_gap.png`
     - Generated at the end of the simulation if `matplotlib` is available.
 
 ### Plotting agent control outputs (plot_telemetry.py)
 
-To inspect how the control output evolves over time (the soliton internal state `u` and the commanded speed magnitude `||v||`), run:
+To inspect how the control output evolves over time (the internal state `u` and the commanded speed magnitude `||v||`), run:
 
 ```powershell
 python plot_telemetry.py
@@ -62,15 +61,7 @@ This script reads `agent_telemetry.csv` and creates **one figure per `node_id`**
 - `u` vs time
 - `velocity_norm` (i.e., `||v||`) vs time
 
-These figures are shown interactively via `matplotlib.pyplot.show()` and are **not saved as PNGs**, because the number of generated figures can be large and depends on the number of agent nodes in the simulation.
-
-### Visualizing the soft limiter nonlinearity (plot_limiter_soft.py)
-
-If you enabled the soft limiter for the soliton state update (`USE_SOFT_LIMITER_U=True`), you can visualize the corresponding nonlinearity with:
-
-```powershell
-python plot_limiter_soft.py
-```
+Figures are saved as `node_<id>_telemetry.png` in the project root.
 
 ## How the simulation is built (main.py)
 
@@ -83,8 +74,8 @@ python plot_limiter_soft.py
 
 It also creates two shared CSV files and passes their paths to protocols via env vars:
 
-- `AGENT_LOG_CSV_PATH` → agents append agent telemetry
-- `TARGET_LOG_CSV_PATH` → the target appends global error telemetry
+- `AGENT_LOG_CSV_PATH` -> agents append agent telemetry
+- `TARGET_LOG_CSV_PATH` -> the target appends global error telemetry
 
 Finally it adds:
 
@@ -95,13 +86,13 @@ Finally it adds:
 
 Each agent runs a periodic control loop (timer `CONTROL_LOOP_TIMER_STR`) that:
 
-1) Broadcasts its own `AgentState` (position, velocity, soliton state `u`).
+1) Broadcasts its own `AgentState` (position, velocity, internal state `u`).
 2) Selects two neighbors (predecessor/successor) around the target using locally cached states, with:
      - timeouts (`AGENT_STATE_TIMEOUT`, `TARGET_STATE_TIMEOUT`)
      - optional pruning (`PRUNE_EXPIRED_STATES`)
      - neighbor switching hysteresis (`HYSTERESIS_RAD`)
 3) Computes a radial velocity correction (PD-like, relative to the moving target).
-4) Updates the tangential “soliton” state and converts it into a tangential velocity.
+4) Updates the tangential state and converts it into a tangential velocity.
 5) Composes the final command and sends it to the mobility handler.
 
 ### Radial controller
@@ -132,16 +123,15 @@ Implementation notes:
 
 If gaps are missing/degenerate, `e_tau = 0`.
 
-### Tangential “soliton” dynamics
+### Tangential dynamics
 
 Each agent maintains a scalar state $u$ that evolves as:
 
-$$u_{k+1} = u_k + dt\Big(C_{coupling}(u_{succ} - u_{pred}) - \beta u_k - \alpha\,g(u_k) + K_{E\tau}\,e_{\tau,eff}\Big)$$
+$$u_{k+1} = u_k + dt\Big(-BETA_U\,u_k + K_{E\tau}\,e_{\tau,eff}\Big)$$
 
 where:
 
 - $dt$ is `CONTROL_PERIOD`
-- $g(u)=u^3$ (or a soft-limited variant when `USE_SOFT_LIMITER_U=True`)
 - $e_{\tau,eff} = e_\tau$ by default
 - optionally, when `K_OMEGA_DAMP > 0`, a purely local angular-rate damping term is used:
     $$e_{\tau,eff} = e_\tau - K_{\omega}\,(\omega_{self} - \omega_{ref})$$
@@ -235,7 +225,7 @@ All project parameters are centralized in [config_param.py](config_param.py). Th
 - **Communication:** `COMMUNICATION_TRANSMISSION_RANGE`, `COMMUNICATION_DELAY`, `COMMUNICATION_FAILURE_RATE`
 - **Mobility limits:** `VM_MAX_SPEED_XY`, `VM_MAX_SPEED_Z`, `VM_MAX_ACC_XY`, `VM_MAX_ACC_Z`, `VM_TAU_XY`, `VM_TAU_Z`
 - **Radial control:** `K_R`, `K_DR`
-- **Tangential control:** `K_TAU`, `BETA_U`, `ALPHA_U`, `C_COUPLING`, `K_E_TAU`, `K_OMEGA_DAMP`
+- **Tangential control:** `K_TAU`, `BETA_U`, `K_E_TAU`, `K_OMEGA_DAMP`
 - **Failure injection:** `FAILURE_ENABLE`, `FAILURE_CHECK_PERIOD`, `FAILURE_MEAN_FAILURES_PER_MIN`, `FAILURE_OFF_TIME`
 - **Liveness:** `AGENT_STATE_TIMEOUT`, `TARGET_STATE_TIMEOUT`, `HYSTERESIS_RAD`, `PRUNE_EXPIRED_STATES`
 
@@ -248,14 +238,6 @@ If you want to look at it in isolation, there is a small demo:
 python -m demos.velocity_mobility.main
 ```
 
-## Testing
-
-```powershell
-python -m pytest -q
-```
-
-This separation allows the mathematical core to be tested independently and potentially reused in other contexts.
-
 ## Examples
 
 ### Constant Velocity Motion
@@ -265,7 +247,7 @@ python .\examples\ex_constant_velocity.py
 ```
 
 This is a **core-only** demo: it uses only the pure functions in `velocity_mobility.core` (no GrADyS-SIM NG runtime required).
-For the main, end-to-end example (simulation builder + handler + protocol + visualization), use `main.py` and `protocol.py`.
+For the main, end-to-end example (simulation builder + handler + protocol + visualization), use `main.py` and `protocol_agent.py`.
 
 ## Testing
 
@@ -288,15 +270,15 @@ python -m pytest tests/test_core_limits.py -v
 
 Two independent scalar constraints:
 
-- **Horizontal**: `||v_xy|| ≤ max_speed_xy`
-- **Vertical**: `|v_z| ≤ max_speed_z`
+- **Horizontal**: `||v_xy|| <= max_speed_xy`
+- **Vertical**: `|v_z| <= max_speed_z`
 
 ### Acceleration Limits
 
 Two independent scalar constraints:
 
-- **Horizontal**: `||a_xy|| ≤ max_acc_xy`
-- **Vertical**: `|a_z| ≤ max_acc_z`
+- **Horizontal**: `||a_xy|| <= max_acc_xy`
+- **Vertical**: `|a_z| <= max_acc_z`
 
 ### Position Integration
 
@@ -308,7 +290,7 @@ x_{k+1} = x_k + v_k * dt
 
 where `dt` is the update rate.
 
-### Optional 1st-order velocity tracking (τ model)
+### Optional 1st-order velocity tracking (tau model)
 
 If `tau_xy` and/or `tau_z` are provided, the handler tracks the commanded velocity with a first-order response before applying acceleration saturation.
 Conceptually:
@@ -317,7 +299,7 @@ Conceptually:
 - Apply bounds: $\|a^*_{xy}\| \le \text{max\_acc\_xy}$ and $|a^*_z| \le \text{max\_acc\_z}$
 - Euler update: $v \leftarrow v + a^*\,dt$
 
-This is useful when you want a more “quadrotor-like” transient response (smooth exponential-like tracking) without simulating full attitude/thrust dynamics.
+This is useful when you want a more "quadrotor-like" transient response (smooth exponential-like tracking) without simulating full attitude/thrust dynamics.
 
 Important detail: horizontal (xy) limits are applied to the **norm** of the (x,y) vector, while vertical (z) is applied to the **absolute value** of the z component.
 So, even with equal limits configured, the x/y components can appear numerically smaller than z during combined motion.
@@ -328,9 +310,9 @@ So, even with equal limits configured, the x/y components can appear numerically
 
 Unlike traditional mobility handlers, this implementation:
 
-- **Does not interpret waypoints** — Only velocity commands
-- **Does not detect arrival** — No concept of "reaching" a destination
-- **Does not stop automatically** — Node continues moving until commanded to stop
+- **Does not interpret waypoints** - Only velocity commands
+- **Does not detect arrival** - No concept of "reaching" a destination
+- **Does not stop automatically** - Node continues moving until commanded to stop
 
 To stop a node, explicitly command zero velocity:
 
@@ -354,15 +336,15 @@ This enables:
 Configuration dataclass for the handler.
 
 **Parameters:**
-- `update_rate` (float) — Time between updates in seconds
-- `max_speed_xy` (float) — Maximum horizontal speed in m/s
-- `max_speed_z` (float) — Maximum vertical speed in m/s
-- `max_acc_xy` (float) — Maximum horizontal acceleration in m/s²
-- `max_acc_z` (float) — Maximum vertical acceleration in m/s²
-- `tau_xy` (float | None) — Optional horizontal velocity tracking time constant (seconds). Must be > 0 if set.
-- `tau_z` (float | None) — Optional vertical velocity tracking time constant (seconds). Must be > 0 if set.
-- `send_telemetry` (bool) — Enable telemetry broadcasts (default: True)
-- `telemetry_decimation` (int) — Emit telemetry every N updates (default: 1)
+- `update_rate` (float) - Time between updates in seconds
+- `max_speed_xy` (float) - Maximum horizontal speed in m/s
+- `max_speed_z` (float) - Maximum vertical speed in m/s
+- `max_acc_xy` (float) - Maximum horizontal acceleration in m/s^2
+- `max_acc_z` (float) - Maximum vertical acceleration in m/s^2
+- `tau_xy` (float | None) - Optional horizontal velocity tracking time constant (seconds). Must be > 0 if set.
+- `tau_z` (float | None) - Optional vertical velocity tracking time constant (seconds). Must be > 0 if set.
+- `send_telemetry` (bool) - Enable telemetry broadcasts (default: True)
+- `telemetry_decimation` (int) - Emit telemetry every N updates (default: 1)
 
 ### VelocityMobilityHandler
 
@@ -375,8 +357,8 @@ Main handler class implementing `INodeHandler`.
 Command a node to move with desired velocity.
 
 **Parameters:**
-- `node_id` — Identifier of the node to control
-- `v_des` — Desired velocity as `(vx, vy, vz)` in m/s
+- `node_id` - Identifier of the node to control
+- `v_des` - Desired velocity as `(vx, vy, vz)` in m/s
 
 **Example:**
 ```python
@@ -423,5 +405,5 @@ If you use this handler in your research, please cite the GrADyS-SIM NG project.
 
 ---
 
-**Author:** Laércio Lucchesi  
+**Author:** Laercio Lucchesi  
 **Date:** January 06, 2026

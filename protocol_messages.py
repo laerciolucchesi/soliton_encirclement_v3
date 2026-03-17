@@ -13,17 +13,14 @@ class AgentState:
 
     TYPE = "AgentState"
 
-    def __init__(self, agent_id, seq, position, velocity, u, u_ss=0.0, q=0.0, q_ss=0.0):
+    def __init__(self, agent_id, seq, position, velocity, u, u_ss=0.0):
         self.agent_id = agent_id
         self.seq = seq
         self.position = position  # (x, y, z)
         self.velocity = velocity  # (vx, vy, vz)
-        self.u = u  # soliton internal state (scalar)
+        self.u = u  # tangential internal state (scalar)
         # Discrete second spatial derivative / curvature (1-hop): u_succ - 2*u + u_pred
         self.u_ss = u_ss
-        # Error-soliton state and curvature (1-hop): q_succ - 2*q + q_pred
-        self.q = q
-        self.q_ss = q_ss
 
     def to_json(self) -> str:
         return json.dumps(
@@ -35,8 +32,6 @@ class AgentState:
                 "velocity": {"x": self.velocity[0], "y": self.velocity[1], "z": self.velocity[2]},
                 "u": self.u,
                 "u_ss": self.u_ss,
-                "q": self.q,
-                "q_ss": self.q_ss,
                 "sender_id": self.agent_id,
             }
         )
@@ -56,8 +51,6 @@ class AgentState:
             velocity=(vel["x"], vel["y"], vel["z"]),
             u=message_dict["u"],
             u_ss=message_dict.get("u_ss", 0.0),
-            q=message_dict.get("q", 0.0),
-            q_ss=message_dict.get("q_ss", 0.0),
         )
 
 

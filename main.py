@@ -1,5 +1,5 @@
-"""This script builds a GrADyS-SIM simulation with a 1 target node and n agent 
-nodes controlled by soliton-like to enforce encirclement behavior.
+"""This script builds a GrADyS-SIM simulation with a 1 target node and n agent
+nodes controlled by a tangential spacing controller to enforce encirclement behavior.
 The target node moves according to a random trajectory, while the agent nodes
 attempt to encircle the target at a specified radius equally spaced between them.
 Run:
@@ -13,7 +13,6 @@ import sys
 
 logging.getLogger("websockets").setLevel(logging.CRITICAL)
 
-from datetime import datetime
 
 # Ensure local src/ packages are importable without installation.
 _REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -59,8 +58,8 @@ mobility_config = VelocityMobilityConfiguration(
     update_rate=VM_UPDATE_RATE,        # Update every in seconds
     max_speed_xy=VM_MAX_SPEED_XY,      # Max horizontal speed in m/s
     max_speed_z=VM_MAX_SPEED_Z,        # Max vertical speed in m/s
-    max_acc_xy=VM_MAX_ACC_XY,          # Max horizontal acceleration in m/s²
-    max_acc_z=VM_MAX_ACC_Z,            # Max vertical acceleration in m/s²
+    max_acc_xy=VM_MAX_ACC_XY,          # Max horizontal acceleration in m/s^2
+    max_acc_z=VM_MAX_ACC_Z,            # Max vertical acceleration in m/s^2
     tau_xy=VM_TAU_XY,                  # Optional: 1st-order horizontal tracking time constant (s)
     tau_z=VM_TAU_Z,                    # Optional: 1st-order vertical tracking time constant (s)
     send_telemetry=VM_SEND_TELEMETRY,  # Enable telemetry
@@ -140,8 +139,6 @@ def main():
         angle = random.uniform(0, 2 * math.pi)
         x = encirclement_radius * random.uniform(0.8, 1.2) * math.cos(angle)
         y = encirclement_radius * random.uniform(0.8, 1.2) * math.sin(angle)
-        # x = encirclement_radius * math.cos(angle)
-        # y = encirclement_radius * math.sin(angle)
         z = 0.0 # Keep agents at ground level
         builder.add_node(AgentProtocol, (x, y, z))
 

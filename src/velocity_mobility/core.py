@@ -8,7 +8,7 @@ This module contains stateless mathematical operations for:
 All functions operate on simple tuples and floats, making them
 easy to test and reuse independently of the simulation framework.
 
-Author: Laércio Lucchesi
+Author: Laercio Lucchesi
 Date: December 27, 2025
 """
 
@@ -26,15 +26,15 @@ def apply_acceleration_limits(
     """Limit velocity change based on acceleration constraints.
 
     Applies independent horizontal and vertical acceleration limits:
-    - Horizontal: ||a_xy|| ≤ max_acc_xy
-    - Vertical: |a_z| ≤ max_acc_z
+    - Horizontal: ||a_xy|| <= max_acc_xy
+    - Vertical: |a_z| <= max_acc_z
 
     Args:
         v_current: Current velocity (vx, vy, vz) in m/s.
         v_desired: Desired velocity (vx, vy, vz) in m/s.
         dt: Time step in seconds.
-        max_acc_xy: Maximum horizontal acceleration in m/s².
-        max_acc_z: Maximum vertical acceleration in m/s².
+        max_acc_xy: Maximum horizontal acceleration in m/s^2.
+        max_acc_z: Maximum vertical acceleration in m/s^2.
 
     Returns:
         New velocity after applying acceleration limits.

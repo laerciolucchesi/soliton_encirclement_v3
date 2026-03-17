@@ -34,8 +34,8 @@ def simulate_constant_velocity():
         update_rate=0.1,        # Update every 0.1 seconds
         max_speed_xy=10.0,      # Max horizontal speed: 10 m/s
         max_speed_z=5.0,        # Max vertical speed: 5 m/s
-        max_acc_xy=5.0,         # Max horizontal acceleration: 5 m/s²
-        max_acc_z=2.0,          # Max vertical acceleration: 2 m/s²
+        max_acc_xy=5.0,         # Max horizontal acceleration: 5 m/s^2
+        max_acc_z=2.0,          # Max vertical acceleration: 2 m/s^2
     )
     
     # Initial state

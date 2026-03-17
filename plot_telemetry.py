@@ -1,14 +1,13 @@
 """Plot telemetry per node and compute the 7 metrics based on e(t)=|e_tau(t)|.
 
 Expected CSV columns (agent_telemetry.csv):
-  node_id, timestamp, e_tau, u, q, velocity_norm
+    node_id, timestamp, e_tau, u, velocity_norm
 
 Plots:
-  One figure per node with 5 stacked subplots (top->bottom):
-    1) e_tau
-    2) u
-    3) q
-    4) velocity_norm
+    One figure per node with 4 stacked subplots (top->bottom):
+        1) e_tau
+        2) u
+        3) velocity_norm
 
 Metrics (global / across all nodes):
   M1..M6 computed for t > t0
@@ -91,7 +90,7 @@ def _settling_time(t: np.ndarray, e: np.ndarray, e_thr: float, settle_window: fl
 
 
 def compute_metrics(df: pd.DataFrame, params: MetricParams) -> Dict[str, float]:
-    required = {"node_id", "timestamp", "e_tau", "u", "q", "velocity_norm"}
+    required = {"node_id", "timestamp", "e_tau", "u", "velocity_norm"}
     missing = sorted(required - set(df.columns))
     if missing:
         raise ValueError(f"CSV missing required columns: {missing}")
@@ -213,37 +212,37 @@ def print_metrics(metrics: Dict[str, float], params: MetricParams) -> None:
     print(f"Window for M1..M6: t > t0, with t0 = {params.t0:.3f} s")
     print(
         f"Settling for M7: e_thr = {params.e_thr:.6f}, settle_window = {params.settle_window:.3f} s "
-        f"(~{st_samp} samples at dt≈{params.dt:.3f}s)"
+        f"(~{st_samp} samples at dt~{params.dt:.3f}s)"
     )
     print(f"Moving average for M4: MA_w = {params.ma_w:.3f} s (~{ma_samp} samples)")
     print(f"Velocity limit for M5/M6: Vmax = {params.vmax_xy:.3f} m/s")
 
     print(f"\nM1  Accuracy: P95(e) pooled = {metrics['M1_P95_e_pooled']:.6f}")
-    print("    Interpretação: 'quão pequeno fica o erro na maior parte do tempo' (regime, cauda 95%).")
+    print("    Interpretation: how small the error stays most of the time (regime, 95% tail).")
 
     print(f"\nM2  Fairness: P95(P95_i(e)) = {metrics['M2_P95_P95i']:.6f}")
-    print("    Interpretação: mede se existe nó consistentemente pior (pega a cauda por nó e depois a cauda entre nós).")
+    print("    Interpretation: checks whether any node is consistently worse (per-node tail, then across nodes).")
 
     print(f"\nM3  Jitter: P95(|de/dt|) = {metrics['M3_P95_abs_dedt']:.6f}")
-    print("    Interpretação: mede 'tremor/chacoalho' do erro (variações rápidas).")
+    print("    Interpretation: fast error fluctuations (tremor/jitter).")
 
-    print(f"\nM4  Oscilação sustentada: RMS(e - MA_w(e)) = {metrics['M4_RMS_osc']:.6f}")
-    print("    Interpretação: componente oscilatória que sobra após remover a tendência lenta com média móvel.")
+    print(f"\nM4  Sustained oscillation: RMS(e - MA_w(e)) = {metrics['M4_RMS_osc']:.6f}")
+    print("    Interpretation: oscillatory component after removing the slow trend with a moving average.")
 
-    print(f"\nM5  Esforço de controle: mean((v_cmd_xy/Vmax)^2) = {metrics['M5_mean_v2']:.6f}")
-    print("    Interpretação: quanto do envelope de velocidade você usa, em média (0=baixo esforço, 1=sempre no limite).")
+    print(f"\nM5  Control effort: mean((v_cmd_xy/Vmax)^2) = {metrics['M5_mean_v2']:.6f}")
+    print("    Interpretation: how much of the velocity envelope is used on average (0=low effort, 1=always at the limit).")
 
-    print(f"\nM6  Saturação: Pr(v_cmd_raw_xy >= Vmax) = {metrics['M6_Pr_sat']:.6f}")
-    print("    Interpretação: frequência com que o controlador *pede mais do que pode* (isso é o que costuma puxar windup).")
-    print("    Observação: usamos >= (com tolerância) porque é comum 'bater no limite' exatamente.")
+    print(f"\nM6  Saturation: Pr(v_cmd_raw_xy >= Vmax) = {metrics['M6_Pr_sat']:.6f}")
+    print("    Interpretation: how often the controller requests more than allowed (the usual source of windup).")
+    print("    Note: we use >= (with tolerance) because it is common to hit the limit exactly.")
 
     print(
-        f"\nM7  Transiente: settling time (por nó) = median={metrics['M7_settle_median']:.3f}s, "
+        f"\nM7  Transient: settling time (per node) = median={metrics['M7_settle_median']:.3f}s, "
         f"P95={metrics['M7_settle_P95']:.3f}s, settled_frac={metrics['M7_settled_frac']:.2f}"
     )
     print(
-        "    Interpretação: quão rápido estabiliza (primeiro instante t_s tal que e(t) <= e_thr por uma janela contínua).\n"
-        "    settled_frac= fração de nós que conseguiram atingir esse critério em algum momento da simulação."
+        "    Interpretation: how quickly it settles (first time t_s such that e(t) <= e_thr for a continuous window).\n"
+        "    settled_frac = fraction of nodes that reached this criterion at any time in the simulation."
     )
 
 
@@ -252,7 +251,7 @@ def plot_per_node(df: pd.DataFrame) -> None:
         g = g.sort_values("timestamp")
         t = g["timestamp"].to_numpy(dtype=float)
 
-        fig, axes = plt.subplots(4, 1, sharex=True, figsize=(12, 10))
+        fig, axes = plt.subplots(3, 1, sharex=True, figsize=(12, 8))
         fig.suptitle(f"Node {int(node_id)} telemetry")
 
         axes[0].plot(t, g["e_tau"].to_numpy(dtype=float))
@@ -263,13 +262,9 @@ def plot_per_node(df: pd.DataFrame) -> None:
         axes[1].set_ylabel("u")
         axes[1].grid(True)
 
-        axes[2].plot(t, g["q"].to_numpy(dtype=float))
-        axes[2].set_ylabel("q")
+        axes[2].plot(t, g["velocity_norm"].to_numpy(dtype=float))
+        axes[2].set_ylabel("velocity_norm")
         axes[2].grid(True)
-
-        axes[3].plot(t, g["velocity_norm"].to_numpy(dtype=float))
-        axes[3].set_ylabel("velocity_norm")
-        axes[3].grid(True)
 
         plt.tight_layout(rect=[0, 0, 1, 0.97])
         #plt.show()
