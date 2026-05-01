@@ -7,8 +7,11 @@ Run:
 """
 
 # Suppress websockets handshake warnings
+import json as _json
 import logging
+import math
 import os
+import random
 import sys
 
 logging.getLogger("websockets").setLevel(logging.CRITICAL)
@@ -20,15 +23,15 @@ _SRC_PATH = os.path.join(_REPO_ROOT, "src")
 if _SRC_PATH not in sys.path:
     sys.path.insert(0, _SRC_PATH)
 
-from gradysim.simulator.handler.communication import CommunicationHandler, CommunicationMedium
-from gradysim.simulator.handler.timer import TimerHandler
-from gradysim.simulator.handler.visualization import VisualizationHandler, VisualizationConfiguration
-from gradysim.simulator.simulation import SimulationBuilder, SimulationConfiguration
-from protocol_target import TargetProtocol
-from protocol_agent import AgentProtocol
-from protocol_adversary import AdversaryProtocol
-from velocity_mobility import VelocityMobilityHandler, VelocityMobilityConfiguration
-from config_param import (
+from gradysim.simulator.handler.communication import CommunicationHandler, CommunicationMedium  # noqa: E402
+from gradysim.simulator.handler.timer import TimerHandler  # noqa: E402
+from gradysim.simulator.handler.visualization import VisualizationHandler, VisualizationConfiguration  # noqa: E402
+from gradysim.simulator.simulation import SimulationBuilder, SimulationConfiguration  # noqa: E402
+from protocol_target import TargetProtocol  # noqa: E402
+from protocol_agent import AgentProtocol  # noqa: E402
+from protocol_adversary import AdversaryProtocol  # noqa: E402
+from velocity_mobility import VelocityMobilityHandler, VelocityMobilityConfiguration  # noqa: E402
+from config_param import (  # noqa: E402
     COMMUNICATION_DELAY,
     COMMUNICATION_FAILURE_RATE,
     COMMUNICATION_TRANSMISSION_RANGE,
@@ -50,8 +53,6 @@ from config_param import (
     VM_UPDATE_RATE,
     EXPERIMENT_REPRODUCIBLE,
 )
-import math
-import random
 
 
 mobility_config = VelocityMobilityConfiguration(
@@ -67,8 +68,57 @@ mobility_config = VelocityMobilityConfiguration(
 )
 
 
+_METHODS = [
+    ("baseline",  "Controlador atual — sem propagação (referência de comparação)"),
+    ("advection", "Advecção-Difusão Amortecida Bidirecional"),
+    ("wave",      "Onda de Segunda Ordem"),
+    ("excitable", "Meio Excitável — FitzHugh-Nagumo"),
+    ("kdv",       "KdV Discreto — Soliton-Inspired"),
+    ("alarm",     "Alarmes Discretos com TTL"),
+    ("burgers",   "Burgers Amortecido com Saturação"),
+]
+
+
+def _select_propagation_method() -> tuple:
+    print("\n=== Seleção do Método de Propagação ===")
+    for i, (key, desc) in enumerate(_METHODS):
+        print(f"  [{i}] {key:12s} — {desc}")
+    while True:
+        try:
+            choice = int(input(f"\nEscolha o método [0-{len(_METHODS) - 1}]: ").strip())
+            if 0 <= choice < len(_METHODS):
+                break
+        except (ValueError, EOFError):
+            pass
+        print(f"  Entrada inválida. Digite um número entre 0 e {len(_METHODS) - 1}.")
+    method = _METHODS[choice][0]
+
+    k_prop = 0.0
+    if method != "baseline":
+        while True:
+            try:
+                raw = input("  Ganho K_PROP (sugestão: 1.0, Enter para 1.0): ").strip()
+                k_prop = float(raw) if raw else 1.0
+                if k_prop >= 0.0:
+                    break
+            except (ValueError, EOFError):
+                pass
+            print("  Valor inválido. Digite um número ≥ 0.")
+
+    print(f"\n  → Método: {method}  |  K_PROP: {k_prop}\n")
+    return method, k_prop
+
+
 def main():
     """Execute the simulation."""
+
+    method, k_prop = _select_propagation_method()
+
+    # Pass propagation config to AgentProtocol via environment variables
+    # (same pattern used for AGENT_LOG_CSV_PATH)
+    os.environ["PROPAGATION_METHOD"] = method
+    os.environ["PROPAGATION_K_PROP"] = str(k_prop)
+    os.environ["PROPAGATION_PARAMS"] = "{}"
 
     # Global deterministic randomness for reproducibility across the whole project.
     if EXPERIMENT_REPRODUCIBLE:

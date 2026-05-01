@@ -25,7 +25,7 @@ TARGET_STATE_BROADCAST_TIMER_STR: str = "broadcast_timer"
 ADVERSARY_STATE_BROADCAST_TIMER_STR: str = "adversary_state_broadcast_timer"
 
 # Simulation defaults (used by main simulation entrypoints)
-SIM_DURATION: float = 6000          # Simulation duration (seconds)
+SIM_DURATION: float = 60          # Simulation duration (seconds)
 SIM_REAL_TIME: bool = False          # Run in real time
 SIM_DEBUG: bool = False             # Enable simulator debug mode
 
@@ -174,34 +174,36 @@ K_DR: float = 0.5
 
 # Tangential controller parameters
 #
-#   1) Update the internal scalar state u:
+# The controller maintains two independent state channels:
 #
-#      u_next = u + dt * (
-#          - BETA_U * u
-#          + K_E_TAU * e_tau_eff
-#      )
+#   LOCAL channel — responds to the node's own spacing error:
+#      u_local_next = u_local + dt * (- BETA_U_LOCAL * u_local + K_E_TAU * e_tau_eff)
 #
-#      where:
-#        - gap_pred, gap_succ are the target-centric angular gaps (radians) to the
-#          predecessor and successor, wrapped to (0, 2*pi)
-#        - e_tau is the local spacing imbalance error (normalized):
-#            e_tau = (gap_succ - gap_pred) / (gap_succ + gap_pred)
-#          (returns 0.0 when gaps are missing/degenerate)
-#        - e_tau_eff is either e_tau or (optionally) a damped version:
-#            e_tau_eff = e_tau - K_OMEGA_DAMP * (omega_self - omega_ref)
+#   PROPAGATED channel — responds to neighbor signals (pure neighbor info, no self-injection):
+#      u_prop_next  = u_prop  + dt * (- BETA_U_PROP  * u_prop  + K_PROP * neighbor_signal)
 #
-#   2) Convert u into a tangential velocity vector in the XY plane:
+#   Composition rule:
+#      if u_local * u_prop >= 0:    u_total = u_local + u_prop   (same direction → sum)
+#      else:                        u_total = smooth_dominance_blend(u_local, u_prop)
 #
-#      v_tau_vec = (K_TAU * u * r_eff) * t_hat
+#   Tangential velocity:
+#      v_tau_vec = (K_TAU * u_total * r_eff) * t_hat
 #
-#      where t_hat is the unit tangential direction around the target and
-#      r_eff = max(r_xy, R_MIN). This yields an induced angular rate
-#      omega ~ v_tau / r ~ K_TAU * u (for r > R_MIN), independent of ENCIRCLEMENT_RADIUS.
+#   where:
+#     - e_tau_eff = e_tau or e_tau - K_OMEGA_DAMP*(omega_self - omega_ref)
+#     - neighbor_signal = propagation_layer.get_neighbor_signal() (excludes self-injection)
+#     - t_hat is the unit tangential direction; r_eff = max(r_xy, R_MIN)
+#
+# Setting BETA_U_LOCAL = BETA_U_PROP = BETA_U reproduces the previous single-state behaviour
+# when channels always agree (e.g. baseline where u_prop = 0 always).
 
 # Tangential controller gains (u dynamics)
-K_TAU: float = 0.2        # tangential control gain (velocity scaling)
-BETA_U: float = 7.0       # linear damping coefficient
-K_E_TAU: float = 25.0     # spacing error injection gain (e_tau multiplier)
+K_TAU: float = 0.2          # tangential control gain (velocity scaling)
+BETA_U: float = 7.0         # legacy single-channel damping (kept for reference)
+BETA_U_LOCAL: float = 7.0   # damping for the local error channel
+BETA_U_PROP: float = 7.0    # damping for the propagated error channel
+K_E_TAU: float = 25.0       # spacing error injection gain (e_tau multiplier)
+U_CONFLICT_BLEND_WIDTH: float = 0.2  # 0.0 restores the previous hard winner-takes-all conflict composition
 
 # Optional local angular-rate damping (no global information required).
 # Use e_tau_eff instead of e_tau in the u update above.
@@ -241,7 +243,7 @@ TARGET_SWARM_SPIN_RHO_MIN: float = 0.05
 
 # METRICS_T0: start time (s) of the "regime" window for M1..M6.
 # Example: METRICS_T0=10 means "ignore the first 10 seconds" when computing the regime metrics.
-METRICS_T0: float = 1.0
+METRICS_T0: float = 0.0
 
 # METRICS_E_THR: absolute error threshold for settling time M7, using e(t)=|e_tau(t)|.
 # Choose a value that is meaningful in your normalized e_tau scale (often 0.01~0.05).
@@ -254,4 +256,3 @@ METRICS_MA_W_SEC: float = 1.0
 # METRICS_SETTLE_WINDOW_SEC: continuous time window (seconds) required for M7 settling.
 # Example: 2.0 means "consider settled when e(t)<=E_THR continuously for 2 seconds".
 METRICS_SETTLE_WINDOW_SEC: float = 5.0
-

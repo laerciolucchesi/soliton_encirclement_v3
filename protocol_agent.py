@@ -21,6 +21,8 @@ except Exception:  # pragma: no cover
 
 import json
 
+from propagation_layer import create_propagation_layer
+
 from config_param import (
     CONTROL_LOOP_TIMER_STR,
     CONTROL_PERIOD,
@@ -35,7 +37,10 @@ from config_param import (
     VM_MAX_SPEED_Z,
     K_TAU,
     BETA_U,
+    BETA_U_LOCAL,
+    BETA_U_PROP,
     K_E_TAU,
+    U_CONFLICT_BLEND_WIDTH,
     K_R,
     K_DR,
     K_OMEGA_DAMP,
@@ -112,12 +117,17 @@ class AgentProtocol(IProtocol):
         )
         self.tangential_controller = TangentialSpacingController(
             beta_u=BETA_U,
+            beta_u_local=BETA_U_LOCAL,
+            beta_u_prop=BETA_U_PROP,
             k_e_tau=K_E_TAU,
+            conflict_blend_width=U_CONFLICT_BLEND_WIDTH,
             initial_u=0.0,
         )
 
         # Control internal state (muscle)
-        self.u: float = 0.0
+        self.u: float = 0.0        # total u after channel composition
+        self.u_local: float = 0.0  # local error channel state
+        self.u_prop: float = 0.0   # propagated error channel state
         self.u_ss: float = 0.0
 
         # Last spacing error values for telemetry and logging.
@@ -131,6 +141,17 @@ class AgentProtocol(IProtocol):
         self.du_damp: float = 0.0
         self.du_from_e_tau: float = 0.0
 
+
+        # Propagation layer — method selected at runtime via main.py menu
+        _prop_method = os.environ.get("PROPAGATION_METHOD", "baseline")
+        _prop_k_prop = float(os.environ.get("PROPAGATION_K_PROP", "0.0"))
+        try:
+            _prop_params = json.loads(os.environ.get("PROPAGATION_PARAMS", "{}"))
+        except Exception:
+            _prop_params = {}
+        self.prop_layer = create_propagation_layer(_prop_method, _prop_params)
+        self._prop_k_prop: float = _prop_k_prop
+        self.last_prop_signal: float = 0.0
 
         # Last commanded velocity (world coordinates).
         self.desired_velocity: Tuple[float, float, float] = (0.0, 0.0, 0.0)
@@ -395,8 +416,14 @@ class AgentProtocol(IProtocol):
         self._prune_expired_states(now)
         pred_id, succ_id, pred_gap, succ_gap, alive_count, theta_i = self.get_two_neighbors(now, position)
 
+        old_pred_id = self.neighbor_pred_id
+        old_succ_id = self.neighbor_succ_id
+
         self.neighbor_pred_id = pred_id
         self.neighbor_succ_id = succ_id
+
+        if pred_id != old_pred_id or succ_id != old_succ_id:
+            self.prop_layer.on_neighbor_change()
         self._neighbor_pred_gap = pred_gap
         self._neighbor_succ_gap = succ_gap
 
@@ -615,6 +642,10 @@ class AgentProtocol(IProtocol):
 
         if timer == FAILURE_RECOVER_TIMER_STR:
             self._failed = False
+            self.prop_layer.on_reset()
+            self.last_prop_signal = 0.0
+            self.u_local = 0.0
+            self.u_prop = 0.0
 
             if self._vis is not None:
                 try:
@@ -708,9 +739,25 @@ class AgentProtocol(IProtocol):
                 self.last_e_tau = float(e_tau) if math.isfinite(e_tau) else 0.0
                 self.last_e_tau_eff = float(e_tau_eff) if math.isfinite(e_tau_eff) else self.last_e_tau
 
+                # Propagation layer update (fast information channel)
+                _pred_prop = self.neighbor_pred_state.prop_state if self.neighbor_pred_state is not None else None
+                _succ_prop = self.neighbor_succ_state.prop_state if self.neighbor_succ_state is not None else None
+                self.prop_layer.update(
+                    e_tau=float(e_tau_used),  # aligned with local controller input
+                    dt=float(self.control_period),
+                    pred_state=_pred_prop,
+                    succ_state=_succ_prop,
+                )
+                # get_neighbor_signal() returns only what arrived from ring neighbors,
+                # excluding the node's own self-injection (no double-counting).
+                _neighbor_sig = self.prop_layer.get_neighbor_signal()
+                self.last_prop_signal = float(_neighbor_sig) if math.isfinite(_neighbor_sig) else 0.0
+
                 tangential_output = self.tangential_controller.update(
                     measurement=float(e_tau_used),
                     dt=float(self.control_period),
+                    prop_signal=self.last_prop_signal,
+                    k_prop=self._prop_k_prop,
                 )
 
                 # Spin term (unchanged)
@@ -728,6 +775,8 @@ class AgentProtocol(IProtocol):
                 self.du_from_e_tau = self._safe_float(tangential_output.du_from_error)
                 self.delta_u = self._safe_float(tangential_output.delta_u)
                 self.u = self._safe_float(tangential_output.u)
+                self.u_local = self._safe_float(tangential_output.u_local)
+                self.u_prop = self._safe_float(tangential_output.u_prop)
 
                 # Final v_tau using the (possibly anti-windup adjusted) self.u
                 v_tau = self.compute_tangential_velocity(self.u, t_hat, r_eff=r_eff)
@@ -756,6 +805,7 @@ class AgentProtocol(IProtocol):
                 velocity=velocity,
                 u=self.u,
                 u_ss=self.u_ss,
+                prop_state=self.prop_layer.get_broadcast_state(),
             )
             message_json = agent_state.to_json()
             command = CommunicationCommand(CommunicationCommandType.BROADCAST, message_json)
@@ -892,7 +942,10 @@ class AgentProtocol(IProtocol):
 
                 # muscle state
                 "u": float(self.u),
+                "u_local": float(self.u_local),
+                "u_prop": float(self.u_prop),
                 "u_ss": float(self.u_ss),
+                "prop_signal": float(self.last_prop_signal),
 
                 # muscle per-tick / per-step terms
                 "delta_u": float(self.delta_u),
@@ -923,7 +976,6 @@ class AgentProtocol(IProtocol):
                 exc,
                 self._csv_path,
             )
-
 
 
 
