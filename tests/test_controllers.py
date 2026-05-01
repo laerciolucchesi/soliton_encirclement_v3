@@ -45,3 +45,15 @@ def test_tangential_spacing_controller_keeps_existing_state_dynamics():
     assert math.isclose(second.du_damp, -3.5, rel_tol=1e-9, abs_tol=1e-9)
     assert math.isclose(second.du_from_error, 5.0, rel_tol=1e-9, abs_tol=1e-9)
     assert math.isclose(second.delta_u, 0.15, rel_tol=1e-9, abs_tol=1e-9)
+
+
+def test_tangential_conflict_blend_avoids_hard_winner_switch():
+    hard = TangentialSpacingController(beta_u=7.0, k_e_tau=25.0, conflict_blend_width=0.0)
+    soft = TangentialSpacingController(beta_u=7.0, k_e_tau=25.0, conflict_blend_width=0.2)
+
+    hard_jump = abs(hard._compose(1.001, -1.0) - hard._compose(0.999, -1.0))
+    soft_jump = abs(soft._compose(1.001, -1.0) - soft._compose(0.999, -1.0))
+
+    assert math.isclose(soft._compose(1.0, -1.0), 0.0, rel_tol=1e-9, abs_tol=1e-9)
+    assert soft_jump < 0.05
+    assert hard_jump > 1.9

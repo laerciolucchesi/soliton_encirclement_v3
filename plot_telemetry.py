@@ -3,10 +3,13 @@
 Expected CSV columns (agent_telemetry.csv):
     node_id, timestamp, e_tau, u, velocity_norm
 
+Optional control-channel columns:
+    u_local, u_prop
+
 Plots:
-    One figure per node with 4 stacked subplots (top->bottom):
+    One figure per node with 3 stacked subplots (top->bottom):
         1) e_tau
-        2) u
+        2) u, u_local, u_propag
         3) velocity_norm
 
 Metrics (global / across all nodes):
@@ -18,15 +21,17 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 
+import matplotlib
+# Save figures without requiring a GUI/Tk installation.
+matplotlib.use("Agg")
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
 from config_param import (
     CONTROL_PERIOD,
-    METRICS_SETTLE_WINDOW_SEC,
     VM_MAX_SPEED_XY,
     METRICS_T0,
     METRICS_E_THR,
@@ -250,6 +255,8 @@ def plot_per_node(df: pd.DataFrame) -> None:
     for node_id, g in df.groupby("node_id", sort=True):
         g = g.sort_values("timestamp")
         t = g["timestamp"].to_numpy(dtype=float)
+        has_u_local = "u_local" in g.columns
+        has_u_prop = "u_prop" in g.columns
 
         fig, axes = plt.subplots(3, 1, sharex=True, figsize=(12, 8))
         fig.suptitle(f"Node {int(node_id)} telemetry")
@@ -258,17 +265,25 @@ def plot_per_node(df: pd.DataFrame) -> None:
         axes[0].set_ylabel("e_tau")
         axes[0].grid(True)
 
-        axes[1].plot(t, g["u"].to_numpy(dtype=float))
-        axes[1].set_ylabel("u")
+        axes[1].plot(t, g["u"].to_numpy(dtype=float), label="u", linewidth=2.0)
+        if has_u_local:
+            axes[1].plot(t, g["u_local"].to_numpy(dtype=float), label="u_local", alpha=0.9)
+        if has_u_prop:
+            axes[1].plot(t, g["u_prop"].to_numpy(dtype=float), label="u_propag", alpha=0.9)
+        axes[1].set_ylabel("control")
         axes[1].grid(True)
+        if has_u_local or has_u_prop:
+            axes[1].legend(loc="best")
 
         axes[2].plot(t, g["velocity_norm"].to_numpy(dtype=float))
         axes[2].set_ylabel("velocity_norm")
+        axes[2].set_xlabel("time [s]")
         axes[2].grid(True)
 
         plt.tight_layout(rect=[0, 0, 1, 0.97])
-        #plt.show()
+        # plt.show()
         plt.savefig(f"node_{int(node_id)}_telemetry.png")
+        plt.close(fig)
 
 
 

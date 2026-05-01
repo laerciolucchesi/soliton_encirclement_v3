@@ -13,11 +13,11 @@ import logging
 # Suppress websockets handshake warnings
 logging.getLogger('websockets').setLevel(logging.CRITICAL)
 
-from gradysim.simulator.handler.communication import CommunicationHandler, CommunicationMedium
-from gradysim.simulator.handler.timer import TimerHandler
-from gradysim.simulator.handler.visualization import VisualizationHandler, VisualizationConfiguration
-from gradysim.simulator.simulation import SimulationBuilder, SimulationConfiguration
-from velocity_mobility import VelocityMobilityHandler, VelocityMobilityConfiguration
+from gradysim.simulator.handler.communication import CommunicationHandler, CommunicationMedium  # noqa: E402
+from gradysim.simulator.handler.timer import TimerHandler  # noqa: E402
+from gradysim.simulator.handler.visualization import VisualizationHandler, VisualizationConfiguration  # noqa: E402
+from gradysim.simulator.simulation import SimulationBuilder, SimulationConfiguration  # noqa: E402
+from velocity_mobility import VelocityMobilityHandler, VelocityMobilityConfiguration  # noqa: E402
 
 # Allow running as either:
 # - module:  python -m demos.velocity_mobility.main

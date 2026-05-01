@@ -13,7 +13,7 @@ class AgentState:
 
     TYPE = "AgentState"
 
-    def __init__(self, agent_id, seq, position, velocity, u, u_ss=0.0):
+    def __init__(self, agent_id, seq, position, velocity, u, u_ss=0.0, prop_state=None):
         self.agent_id = agent_id
         self.seq = seq
         self.position = position  # (x, y, z)
@@ -21,6 +21,8 @@ class AgentState:
         self.u = u  # tangential internal state (scalar)
         # Discrete second spatial derivative / curvature (1-hop): u_succ - 2*u + u_pred
         self.u_ss = u_ss
+        # Propagation layer state (method-specific dict; empty for baseline)
+        self.prop_state: dict = prop_state if isinstance(prop_state, dict) else {}
 
     def to_json(self) -> str:
         return json.dumps(
@@ -32,6 +34,7 @@ class AgentState:
                 "velocity": {"x": self.velocity[0], "y": self.velocity[1], "z": self.velocity[2]},
                 "u": self.u,
                 "u_ss": self.u_ss,
+                "prop_state": self.prop_state,
                 "sender_id": self.agent_id,
             }
         )
@@ -51,6 +54,7 @@ class AgentState:
             velocity=(vel["x"], vel["y"], vel["z"]),
             u=message_dict["u"],
             u_ss=message_dict.get("u_ss", 0.0),
+            prop_state=message_dict.get("prop_state") or {},
         )
 
 

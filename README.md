@@ -5,9 +5,12 @@ Swarm encirclement experiment for the
 
 The main focus of this repository is the end-to-end encirclement simulation:
 
-- [main.py](main.py): simulation builder (handlers + nodes)
+- [main.py](main.py): simulation builder (handlers + nodes) and interactive propagation-method menu
 - [protocol_agent.py](protocol_agent.py): distributed agent controller + failure injection
-- [protocol_target.py](protocol_target.py): target state broadcast + optional target motion + global error metrics
+- [protocol_target.py](protocol_target.py): target state broadcast + optional target motion + swarm spin PD + global error metrics
+- [protocol_adversary.py](protocol_adversary.py): adversary node — random roaming intruder used by the swarm spin controller
+- [propagation_layer.py](propagation_layer.py): pluggable fast-information channels (baseline, advection, wave, FHN, KdV, alarm, Burgers)
+- [controllers.py](controllers.py): radial PD, wrapped-angle PD, and the two-channel tangential controller
 - [config_param.py](config_param.py): centralized configuration knobs
 
 This repository also contains a reusable velocity-driven mobility handler in `src/velocity_mobility`, used by the simulation to apply speed/acceleration limits to commanded velocities.
@@ -18,7 +21,7 @@ This repository also contains a reusable velocity-driven mobility handler in `sr
 
 ```powershell
 python -m venv .venv
-\.venv\Scripts\Activate.ps1
+.\.venv\Scripts\Activate.ps1
 python -m pip install -U pip setuptools wheel
 python -m pip install -e .
 ```
@@ -35,14 +38,35 @@ Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
 python main.py
 ```
 
-Most parameters are in [config_param.py](config_param.py) (simulation duration, number of agents, desired radius, controller gains, failure injection, target motion).
+On startup, `main.py` prompts for a **propagation method** (the
+fast-information channel that augments the tangential controller) and a
+gain `K_PROP`:
+
+```
+=== Seleção do Método de Propagação ===
+  [0] baseline     — sem propagação (referência de comparação)
+  [1] advection    — Advecção-Difusão Amortecida Bidirecional
+  [2] wave         — Onda de Segunda Ordem
+  [3] excitable    — Meio Excitável (FitzHugh-Nagumo)
+  [4] kdv          — KdV Discreto (Soliton-Inspired)
+  [5] alarm        — Alarmes Discretos com TTL
+  [6] burgers      — Burgers Amortecido com Saturação
+```
+
+`baseline` reproduces the previous (single-channel) controller exactly;
+the other methods enable the propagated channel `u_prop` described
+below. For batch/non-interactive runs you can preset
+`PROPAGATION_METHOD`, `PROPAGATION_K_PROP`, and `PROPAGATION_PARAMS`
+(JSON) as environment variables and stub stdin.
+
+Most parameters are in [config_param.py](config_param.py) (simulation duration, number of agents, desired radius, controller gains, failure injection, target motion, swarm-spin PD).
 
 ## Outputs
 
 The simulation writes files next to where you run it:
 
 - `agent_telemetry.csv` (written by agents on `finish()`)
-    - Columns: `node_id,timestamp,dt_u,u,u_ss,delta_u,du_damp,du_from_e_tau,e_tau,e_tau_eff,velocity_norm`
+    - Columns: `node_id,timestamp,dt_u,u,u_local,u_prop,u_ss,prop_signal,delta_u,du_damp,du_from_e_tau,e_tau,e_tau_eff,velocity_norm`
 - `target_telemetry.csv` (written by the target on `finish()`)
     - Columns: `timestamp,E_r,E_vr,rho,G_max,E_gap`
 - `metric_E_r.png`, `metric_E_vr.png`, `metric_rho.png`, `metric_G_max.png`, `metric_E_gap.png`
@@ -56,9 +80,10 @@ To inspect how the control output evolves over time (the internal state `u` and 
 python plot_telemetry.py
 ```
 
-This script reads `agent_telemetry.csv` and creates **one figure per `node_id`** with two subplots:
+This script reads `agent_telemetry.csv` and creates **one figure per `node_id`** with three subplots:
 
-- `u` vs time
+- `e_tau` vs time
+- `u`, `u_local`, and `u_propag` vs time
 - `velocity_norm` (i.e., `||v||`) vs time
 
 Figures are saved as `node_<id>_telemetry.png` in the project root.
@@ -150,6 +175,33 @@ $$\omega = \frac{v_{\tau}}{r} \approx K_{\tau}\,u \quad (r > R_{min}),$$
 
 independent of the design radius $R$.
 
+### Propagation layer (v3)
+
+In v3 the tangential controller carries **two state channels** that are
+composed cooperatively:
+
+- `u_local` — driven by the local spacing error $e_\tau$ (gain `K_E_TAU`,
+    damping `BETA_U_LOCAL`).
+- `u_prop` — driven by `K_PROP * prop_signal` from a per-agent
+    [propagation_layer.py](propagation_layer.py) instance, with damping
+    `BETA_U_PROP`.
+
+When the two channels agree in sign, the controller uses
+$u = u_{local} + u_{prop}$. When they conflict, it applies a smooth
+$\tanh$ dominance blend of width `U_CONFLICT_BLEND_WIDTH` instead of a
+hard winner-takes-all switch (set the width to `0.0` to recover the
+legacy behaviour).
+
+The `prop_signal` consumed by `u_prop` is `get_neighbor_signal()` — the
+fraction of the layer's output that comes from ring neighbours only,
+excluding the node's own self-injection. This avoids double-counting the
+local error term.
+
+Each propagation mechanism broadcasts a method-specific
+`AgentState.prop_state` dict and updates internal fields every control
+tick using its predecessor's and successor's broadcast state. Mechanism
+docstrings document the model, parameters, and stability assumptions.
+
 ### Final commanded velocity
 
 The final command is:
@@ -178,12 +230,35 @@ On recovery the node is painted blue again and normal timers are rescheduled.
 
 ## Target protocol (protocol_target.py)
 
-The target periodically broadcasts `TargetState` (position, velocity) every `TARGET_STATE_BROADCAST_PERIOD`.
+The target periodically broadcasts `TargetState` (position, velocity, per-agent `alive_lambdas` weights, swarm spin reference `omega_ref`) every `TARGET_STATE_BROADCAST_PERIOD`.
 
 If a mobility handler exists, it can also move in the XY plane:
 
 - every `TARGET_MOTION_PERIOD` the target chooses a new velocity direction
 - if it is outside `TARGET_MOTION_BOUNDARY_XY`, it steers back toward the origin
+
+### Swarm spin controller and adversary
+
+When `TARGET_SWARM_SPIN_ENABLE=True`, the target runs a wrapped-angle PD
+controller on the angle between the swarm's resultant unit vector
+(target → agents) and the target → adversary direction, and broadcasts
+the resulting `omega_ref`. Each agent then adds an $\omega_{ref}\cdot r$
+spin term along $\hat t$. When the swarm is nearly uniformly distributed
+(Kuramoto $\rho < $ `TARGET_SWARM_SPIN_RHO_MIN`) the angular error is
+disabled to avoid an arbitrary direction bias.
+
+The adversary node ([protocol_adversary.py](protocol_adversary.py))
+roams randomly in $[-A, A]^2$ (with $A=$ `ADVERSARY_ROAM_BOUND_XY`) at
+speed `ADVERSARY_ROAM_SPEED_XY`, while staying at least
+`ADVERSARY_MIN_TARGET_DISTANCE` meters from the target.
+
+### Edge / non-uniform spacing
+
+The target also assigns one agent an "edge lambda" derived from
+`PROTECTION_ANGLE_DEG` (the desired protected/covered arc). The holder
+is reassigned geometrically (predecessor of the largest gap, with
+hysteresis and a 1 s cooldown to prevent chattering). Setting
+`PROTECTION_ANGLE_DEG = 360` recovers uniform spacing.
 
 ### Encirclement metrics (target telemetry)
 
@@ -225,9 +300,13 @@ All project parameters are centralized in [config_param.py](config_param.py). Th
 - **Communication:** `COMMUNICATION_TRANSMISSION_RANGE`, `COMMUNICATION_DELAY`, `COMMUNICATION_FAILURE_RATE`
 - **Mobility limits:** `VM_MAX_SPEED_XY`, `VM_MAX_SPEED_Z`, `VM_MAX_ACC_XY`, `VM_MAX_ACC_Z`, `VM_TAU_XY`, `VM_TAU_Z`
 - **Radial control:** `K_R`, `K_DR`
-- **Tangential control:** `K_TAU`, `BETA_U`, `K_E_TAU`, `K_OMEGA_DAMP`
+- **Tangential control:** `K_TAU`, `BETA_U`, `BETA_U_LOCAL`, `BETA_U_PROP`, `K_E_TAU`, `U_CONFLICT_BLEND_WIDTH`, `K_OMEGA_DAMP`
+- **Swarm spin (target):** `TARGET_SWARM_SPIN_ENABLE`, `TARGET_SWARM_OMEGA_REF`, `TARGET_SWARM_OMEGA_PD_KP`, `TARGET_SWARM_OMEGA_PD_KD`, `TARGET_SWARM_OMEGA_PD_MAX_ABS`, `TARGET_SWARM_SPIN_RHO_MIN`
+- **Adversary:** `ADVERSARY_ROAM_BOUND_XY`, `ADVERSARY_MIN_TARGET_DISTANCE`, `ADVERSARY_ROAM_SPEED_XY`
+- **Edge spacing:** `PROTECTION_ANGLE_DEG`, `R_MIN`
 - **Failure injection:** `FAILURE_ENABLE`, `FAILURE_CHECK_PERIOD`, `FAILURE_MEAN_FAILURES_PER_MIN`, `FAILURE_OFF_TIME`
 - **Liveness:** `AGENT_STATE_TIMEOUT`, `TARGET_STATE_TIMEOUT`, `HYSTERESIS_RAD`, `PRUNE_EXPIRED_STATES`
+- **Reproducibility:** `EXPERIMENT_REPRODUCIBLE`
 
 ## velocity_mobility (brief)
 

@@ -168,25 +168,94 @@ class WrappedAnglePDController(BaseController):
 
 @dataclass(frozen=True)
 class TangentialControlOutput:
-    u: float
-    delta_u: float
-    du: float
-    du_damp: float
+    u: float           # total tangential drive (u_local + u_prop after composition)
+    u_local: float     # local error channel state
+    u_prop: float      # propagated error channel state
+    delta_u: float     # total increment applied this tick
+    du_local: float    # du for the local channel
+    du_prop: float     # du for the propagated channel
+    du_damp_local: float
+    du_damp_prop: float
     du_from_error: float
+    du_from_prop_signal: float
+    # Legacy aliases kept for backward-compatible telemetry reads
+    @property
+    def du(self) -> float:
+        return self.du_local + self.du_prop
+
+    @property
+    def du_damp(self) -> float:
+        return self.du_damp_local + self.du_damp_prop
+
+    @property
+    def du_from_prop(self) -> float:
+        return self.du_from_prop_signal
 
 
 class TangentialSpacingController(BaseController):
-    """Current tangential first-order state dynamics kept unchanged."""
+    """Two-channel tangential spacing controller.
 
-    def __init__(self, *, beta_u: float, k_e_tau: float, initial_u: float = 0.0):
-        self.beta_u = float(beta_u)
+    Maintains separate state variables for the local error response (u_local)
+    and the propagated neighbor response (u_prop).  The two channels are composed
+    cooperatively when they agree (same sign).  When they conflict, a smooth
+    dominance blend is used instead of a hard winner-takes-all switch.
+
+    This prevents the propagated channel from double-counting the local error
+    (which is injected independently via k_e_tau * e_tau), preserves the
+    directional semantics of each contribution, and avoids discontinuous jumps
+    when |u_local| and |u_prop| become nearly equal with opposite signs.
+    """
+
+    def __init__(
+        self,
+        *,
+        beta_u: float,
+        k_e_tau: float,
+        initial_u: float = 0.0,
+        beta_u_local: float | None = None,
+        beta_u_prop: float | None = None,
+        conflict_blend_width: float = 0.0,
+    ):
+        # beta_u is kept as the legacy fallback; explicit per-channel values take priority
+        self.beta_u_local = float(beta_u_local if beta_u_local is not None else beta_u)
+        self.beta_u_prop = float(beta_u_prop if beta_u_prop is not None else beta_u)
         self.k_e_tau = float(k_e_tau)
-        self.u = float(initial_u) if math.isfinite(float(initial_u)) else 0.0
+        width = float(conflict_blend_width) if math.isfinite(float(conflict_blend_width)) else 0.0
+        self.conflict_blend_width = abs(width)
+        init = float(initial_u) if math.isfinite(float(initial_u)) else 0.0
+        self.u_local: float = init
+        self.u_prop: float = 0.0
+
+    @property
+    def u(self) -> float:
+        """Total tangential drive after cooperative/smoothed-conflict composition."""
+        return self._compose(self.u_local, self.u_prop)
+
+    def _compose(self, u_local: float, u_prop: float) -> float:
+        """Cooperative when channels agree; smooth dominance blend when they conflict."""
+        if u_local * u_prop >= 0.0:
+            return u_local + u_prop
+        if self.conflict_blend_width <= 0.0:
+            return u_local if abs(u_local) >= abs(u_prop) else u_prop
+
+        diff = abs(u_local) - abs(u_prop)
+        w_local = 0.5 * (1.0 + math.tanh(diff / self.conflict_blend_width))
+        return (w_local * u_local) + ((1.0 - w_local) * u_prop)
 
     def reset(self) -> None:
-        self.u = 0.0
+        self.u_local = 0.0
+        self.u_prop = 0.0
 
-    def update(self, *, measurement: float, dt: float) -> TangentialControlOutput:
+    def update(
+        self,
+        *,
+        measurement: float,
+        dt: float,
+        prop_signal: float = 0.0,
+        k_prop: float = 0.0,
+        # Legacy parameter name accepted for backward compatibility
+        prop_du: float | None = None,
+    ) -> TangentialControlOutput:
         try:
             dt_f = float(dt)
         except Exception:
@@ -195,28 +264,53 @@ class TangentialSpacingController(BaseController):
             dt_f = 0.0
 
         e_tau = float(measurement) if math.isfinite(float(measurement)) else 0.0
-        u_prev = float(self.u) if math.isfinite(float(self.u)) else 0.0
+        u_local_prev = float(self.u_local) if math.isfinite(float(self.u_local)) else 0.0
+        u_prop_prev = float(self.u_prop) if math.isfinite(float(self.u_prop)) else 0.0
 
-        du_damp = float(-self.beta_u * u_prev)
-        du_from_error = float(self.k_e_tau * e_tau)
-        du = float(du_damp + du_from_error)
-        u_next = float(u_prev + (dt_f * du))
+        # --- Local channel ---
+        du_damp_local = -self.beta_u_local * u_local_prev
+        du_from_error = self.k_e_tau * e_tau
+        du_local = du_damp_local + du_from_error
+        u_local_next = u_local_prev + dt_f * du_local
 
-        if not (math.isfinite(u_next) and math.isfinite(du)):
-            self.u = 0.0
-            return TangentialControlOutput(
-                u=0.0,
-                delta_u=0.0,
-                du=0.0,
-                du_damp=0.0,
-                du_from_error=0.0,
-            )
+        # --- Propagated channel ---
+        # prop_signal is the pure neighbor signal (no self-injection).
+        # k_prop is applied here so the controller owns the scaling.
+        # Legacy prop_du path: if caller passes pre-scaled prop_du, use it as the
+        # neighbor signal term directly (k_prop is ignored in that case).
+        if prop_du is not None:
+            effective_prop_drive = float(prop_du) if math.isfinite(float(prop_du)) else 0.0
+        else:
+            sig = float(prop_signal) if math.isfinite(float(prop_signal)) else 0.0
+            kp = float(k_prop) if math.isfinite(float(k_prop)) else 0.0
+            effective_prop_drive = kp * sig
 
-        self.u = u_next
+        du_damp_prop = -self.beta_u_prop * u_prop_prev
+        du_from_prop_signal = effective_prop_drive
+        du_prop = du_damp_prop + du_from_prop_signal
+        u_prop_next = u_prop_prev + dt_f * du_prop
+
+        # Guard against non-finite states
+        if not math.isfinite(u_local_next):
+            u_local_next = 0.0
+        if not math.isfinite(u_prop_next):
+            u_prop_next = 0.0
+
+        self.u_local = u_local_next
+        self.u_prop = u_prop_next
+
+        u_total = self._compose(u_local_next, u_prop_next)
+        delta_u = u_total - self._compose(u_local_prev, u_prop_prev)
+
         return TangentialControlOutput(
-            u=float(u_next),
-            delta_u=float(dt_f * du),
-            du=float(du),
-            du_damp=float(du_damp),
+            u=float(u_total),
+            u_local=float(u_local_next),
+            u_prop=float(u_prop_next),
+            delta_u=float(delta_u),
+            du_local=float(du_local),
+            du_prop=float(du_prop),
+            du_damp_local=float(du_damp_local),
+            du_damp_prop=float(du_damp_prop),
             du_from_error=float(du_from_error),
+            du_from_prop_signal=float(du_from_prop_signal),
         )
