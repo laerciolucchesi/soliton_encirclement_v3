@@ -41,6 +41,7 @@ from config_param import (
     BETA_U_PROP,
     K_E_TAU,
     U_CONFLICT_BLEND_WIDTH,
+    TANGENTIAL_COMPOSITION_MODE,
     K_R,
     K_DR,
     K_OMEGA_DAMP,
@@ -121,6 +122,7 @@ class AgentProtocol(IProtocol):
             beta_u_prop=BETA_U_PROP,
             k_e_tau=K_E_TAU,
             conflict_blend_width=U_CONFLICT_BLEND_WIDTH,
+            composition_mode=TANGENTIAL_COMPOSITION_MODE,
             initial_u=0.0,
         )
 

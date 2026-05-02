@@ -1,5 +1,7 @@
 import math
 
+import pytest
+
 from controllers import (
     RadialDistanceController,
     TangentialSpacingController,
@@ -57,3 +59,50 @@ def test_tangential_conflict_blend_avoids_hard_winner_switch():
     assert math.isclose(soft._compose(1.0, -1.0), 0.0, rel_tol=1e-9, abs_tol=1e-9)
     assert soft_jump < 0.05
     assert hard_jump > 1.9
+
+
+def test_tangential_default_composition_mode_is_blend():
+    ctrl = TangentialSpacingController(beta_u=7.0, k_e_tau=25.0)
+    assert ctrl.composition_mode == "blend"
+
+
+def test_tangential_sum_mode_is_pure_addition_in_all_regimes():
+    ctrl = TangentialSpacingController(
+        beta_u=7.0, k_e_tau=25.0, composition_mode="sum",
+    )
+    # Cooperative regime — coincides with blend
+    assert math.isclose(ctrl._compose(2.0, 1.0), 3.0, rel_tol=1e-9, abs_tol=1e-9)
+    # Conflict, equal magnitudes — also coincides
+    assert math.isclose(ctrl._compose(1.0, -1.0), 0.0, rel_tol=1e-9, abs_tol=1e-9)
+    # Conflict, dominant local — sum keeps the algebraic sum (not |dominant|)
+    assert math.isclose(ctrl._compose(2.0, -1.0), 1.0, rel_tol=1e-9, abs_tol=1e-9)
+    # Conflict, dominant prop — symmetric
+    assert math.isclose(ctrl._compose(-1.0, 2.0), 1.0, rel_tol=1e-9, abs_tol=1e-9)
+    # Symmetry under negation
+    assert math.isclose(
+        ctrl._compose(-2.0, 1.0), -ctrl._compose(2.0, -1.0),
+        rel_tol=1e-9, abs_tol=1e-9,
+    )
+
+
+def test_tangential_sum_and_blend_diverge_in_conflict_with_unequal_magnitudes():
+    blend_ctrl = TangentialSpacingController(
+        beta_u=7.0, k_e_tau=25.0,
+        composition_mode="blend", conflict_blend_width=0.2,
+    )
+    sum_ctrl = TangentialSpacingController(
+        beta_u=7.0, k_e_tau=25.0, composition_mode="sum",
+    )
+    # In conflict with clearly dominant local, blend ≈ u_local while sum ≈ u_local + u_prop.
+    # tanh(1/0.2) = tanh(5) ≈ 0.9999, so blend stays very close to +2.
+    blend_value = blend_ctrl._compose(2.0, -1.0)
+    sum_value = sum_ctrl._compose(2.0, -1.0)
+    assert blend_value > 1.9
+    assert math.isclose(sum_value, 1.0, rel_tol=1e-9, abs_tol=1e-9)
+
+
+def test_tangential_invalid_composition_mode_raises():
+    with pytest.raises(ValueError, match="composition_mode"):
+        TangentialSpacingController(
+            beta_u=7.0, k_e_tau=25.0, composition_mode="not_a_mode",
+        )

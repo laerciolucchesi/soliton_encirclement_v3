@@ -36,6 +36,8 @@ from config_param import (  # noqa: E402
     COMMUNICATION_FAILURE_RATE,
     COMMUNICATION_TRANSMISSION_RANGE,
     ENCIRCLEMENT_RADIUS,
+    INIT_ANGLES_EQUIDISTANT,
+    INIT_RADIUS_RANGE,
     NUM_AGENTS,
     SIM_DEBUG,
     SIM_DURATION,
@@ -80,6 +82,28 @@ _METHODS = [
 
 
 def _select_propagation_method() -> tuple:
+    # Non-interactive override for batch sweeps: when PROPAGATION_METHOD is set
+    # in the environment, skip the prompt and read the choice directly. This is
+    # what run_sweep.py relies on.
+    env_method = os.environ.get("PROPAGATION_METHOD")
+    if env_method:
+        valid = {key for key, _ in _METHODS}
+        if env_method not in valid:
+            raise ValueError(
+                f"PROPAGATION_METHOD={env_method!r} is invalid; expected one of {sorted(valid)}"
+            )
+        if env_method == "baseline":
+            k_prop = 0.0
+        else:
+            try:
+                k_prop = float(os.environ.get("PROPAGATION_K_PROP", "1.0"))
+            except ValueError:
+                k_prop = 1.0
+            if not (k_prop == k_prop) or k_prop < 0.0:  # NaN-safe + non-negative guard
+                k_prop = 1.0
+        print(f"\n  → Método: {env_method}  |  K_PROP: {k_prop}  (from environment)\n")
+        return env_method, k_prop
+
     print("\n=== Seleção do Método de Propagação ===")
     for i, (key, desc) in enumerate(_METHODS):
         print(f"  [{i}] {key:12s} — {desc}")
@@ -180,20 +204,43 @@ def main():
     # Add adversary node at a fixed initial position
     builder.add_node(AdversaryProtocol, (40, 40, 0))
 
-    # Add agent nodes at random positions around the target
-    # and randomly vary the desired encirclement radius
-
+    # Add agent nodes around the target.
+    # Initial radius and angle distributions are configured via:
+    #   - INIT_RADIUS_RANGE: half-width of the uniform radius scatter (fraction of R).
+    #     0.0 places every agent exactly at ENCIRCLEMENT_RADIUS.
+    #   - INIT_ANGLES_EQUIDISTANT: if True, angles are spaced uniformly by 2*pi/num_agents;
+    #     if False, angles are drawn uniformly in [0, 2*pi).
     num_agents = NUM_AGENTS # Number of agent nodes
     encirclement_radius = ENCIRCLEMENT_RADIUS # Desired encirclement radius in meters
+    radius_range = max(0.0, INIT_RADIUS_RANGE)
+    r_lo = 1.0 - radius_range
+    r_hi = 1.0 + radius_range
     for i in range(num_agents):
-        angle = random.uniform(0, 2 * math.pi)
-        x = encirclement_radius * random.uniform(0.8, 1.2) * math.cos(angle)
-        y = encirclement_radius * random.uniform(0.8, 1.2) * math.sin(angle)
+        if INIT_ANGLES_EQUIDISTANT:
+            angle = i * (2 * math.pi / num_agents)
+        else:
+            angle = random.uniform(0, 2 * math.pi)
+        radius_scale = 1.0 if radius_range == 0.0 else random.uniform(r_lo, r_hi)
+        x = encirclement_radius * radius_scale * math.cos(angle)
+        y = encirclement_radius * radius_scale * math.sin(angle)
         z = 0.0 # Keep agents at ground level
         builder.add_node(AgentProtocol, (x, y, z))
 
     simulation = builder.build()
     simulation.start_simulation()
+
+    # Post-simulation analysis: print metrics, render per-node telemetry plots,
+    # and append one summary row (context + M1..M7) to runs_summary.csv so
+    # multiple runs can be compared later.
+    import plot_telemetry  # local import: defers matplotlib backend setup until needed
+    if os.path.exists(csv_path):
+        summary_csv_path = os.environ.get(
+            "RUNS_SUMMARY_CSV_PATH",
+            os.path.join(os.getcwd(), "runs_summary.csv"),
+        )
+        plot_telemetry.main(csv_path=csv_path, summary_csv_path=summary_csv_path)
+    else:
+        print(f"[main] Skipping post-simulation analysis: {csv_path} not found.")
 
 if __name__ == "__main__":
     main()
