@@ -192,18 +192,30 @@ class TangentialControlOutput:
         return self.du_from_prop_signal
 
 
+VALID_COMPOSITION_MODES = ("blend", "sum")
+
+
 class TangentialSpacingController(BaseController):
     """Two-channel tangential spacing controller.
 
     Maintains separate state variables for the local error response (u_local)
-    and the propagated neighbor response (u_prop).  The two channels are composed
-    cooperatively when they agree (same sign).  When they conflict, a smooth
-    dominance blend is used instead of a hard winner-takes-all switch.
+    and the propagated neighbor response (u_prop). The composition into the
+    final u is selected by ``composition_mode``:
 
-    This prevents the propagated channel from double-counting the local error
-    (which is injected independently via k_e_tau * e_tau), preserves the
-    directional semantics of each contribution, and avoids discontinuous jumps
-    when |u_local| and |u_prop| become nearly equal with opposite signs.
+    - "blend": cooperative sum when channels agree in sign; smooth tanh
+      dominance blend (width = ``conflict_blend_width``) when they conflict.
+      The dominant channel is preserved and the smaller one is attenuated —
+      defensive against unreliable propagation.
+    - "sum": pure addition u = u_local + u_prop in all regimes. The propagation
+      channel always contributes; aligned with the soliton-inspired premise
+      that neighbor signals carry useful information.
+
+    No saturation is applied to u at the controller level in either mode.
+    Velocity-level saturation in the mobility handler is the single source of
+    truth for actuator limits.
+
+    The two-channel design prevents the propagated channel from double-counting
+    the local error (which is injected independently via k_e_tau * e_tau).
     """
 
     def __init__(
@@ -215,6 +227,7 @@ class TangentialSpacingController(BaseController):
         beta_u_local: float | None = None,
         beta_u_prop: float | None = None,
         conflict_blend_width: float = 0.0,
+        composition_mode: str = "blend",
     ):
         # beta_u is kept as the legacy fallback; explicit per-channel values take priority
         self.beta_u_local = float(beta_u_local if beta_u_local is not None else beta_u)
@@ -222,17 +235,27 @@ class TangentialSpacingController(BaseController):
         self.k_e_tau = float(k_e_tau)
         width = float(conflict_blend_width) if math.isfinite(float(conflict_blend_width)) else 0.0
         self.conflict_blend_width = abs(width)
+        if composition_mode not in VALID_COMPOSITION_MODES:
+            raise ValueError(
+                f"composition_mode must be one of {VALID_COMPOSITION_MODES}, "
+                f"got {composition_mode!r}"
+            )
+        self.composition_mode = composition_mode
         init = float(initial_u) if math.isfinite(float(initial_u)) else 0.0
         self.u_local: float = init
         self.u_prop: float = 0.0
 
     @property
     def u(self) -> float:
-        """Total tangential drive after cooperative/smoothed-conflict composition."""
+        """Total tangential drive after channel composition."""
         return self._compose(self.u_local, self.u_prop)
 
     def _compose(self, u_local: float, u_prop: float) -> float:
-        """Cooperative when channels agree; smooth dominance blend when they conflict."""
+        """Combine the two channel states into u according to composition_mode."""
+        if self.composition_mode == "sum":
+            return u_local + u_prop
+
+        # "blend": cooperative when channels agree; smooth dominance on conflict.
         if u_local * u_prop >= 0.0:
             return u_local + u_prop
         if self.conflict_blend_width <= 0.0:

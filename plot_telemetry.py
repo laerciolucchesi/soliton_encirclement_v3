@@ -19,8 +19,11 @@ Metrics (global / across all nodes):
 
 from __future__ import annotations
 
+import csv
 import math
+import os
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Dict, Optional
 
 import matplotlib
@@ -32,14 +35,60 @@ import matplotlib.pyplot as plt
 
 from config_param import (
     CONTROL_PERIOD,
-    VM_MAX_SPEED_XY,
-    METRICS_T0,
+    ENCIRCLEMENT_RADIUS,
+    EXPERIMENT_REPRODUCIBLE,
+    FAILURE_ENABLE,
+    FAILURE_MEAN_FAILURES_PER_MIN,
+    INIT_ANGLES_EQUIDISTANT,
+    INIT_RADIUS_RANGE,
     METRICS_E_THR,
     METRICS_MA_W_SEC,
     METRICS_SETTLE_WINDOW_SEC,
+    METRICS_T0,
+    NUM_AGENTS,
+    PROTECTION_ANGLE_DEG,
+    SIM_DURATION,
+    TANGENTIAL_COMPOSITION_MODE,
+    TARGET_SWARM_OMEGA_REF,
+    TARGET_SWARM_SPIN_ENABLE,
+    VM_MAX_SPEED_XY,
 )
 
 CSV_DEFAULT_PATH = "agent_telemetry.csv"
+SUMMARY_CSV_DEFAULT_PATH = "runs_summary.csv"
+
+# Column order for the cross-run summary CSV. Keep stable: appending a new row to
+# an existing file with a different header would corrupt the table.
+SUMMARY_COLUMNS = [
+    "run_timestamp_iso",
+    "propagation_method",
+    "k_prop",
+    "composition_mode",
+    "num_agents",
+    "encirclement_radius",
+    "sim_duration",
+    "init_radius_range",
+    "init_angles_equidistant",
+    "failure_enable",
+    "failure_mean_per_min",
+    "target_swarm_spin_enable",
+    "target_swarm_omega_ref",
+    "protection_angle_deg",
+    "experiment_reproducible",
+    "metrics_t0",
+    "metrics_e_thr",
+    "metrics_ma_w_sec",
+    "metrics_settle_window_sec",
+    "M1_P95_e_pooled",
+    "M2_P95_P95i",
+    "M3_P95_abs_dedt",
+    "M4_RMS_osc",
+    "M5_mean_v2",
+    "M6_Pr_sat",
+    "M7_settle_median",
+    "M7_settle_P95",
+    "M7_settled_frac",
+]
 
 
 @dataclass
@@ -287,7 +336,118 @@ def plot_per_node(df: pd.DataFrame) -> None:
 
 
 
-def main(csv_path: str = CSV_DEFAULT_PATH) -> None:
+def _collect_run_context() -> Dict[str, object]:
+    """Snapshot the configuration that defines this run.
+
+    Pulls the propagation method/gain from environment variables (set by main.py
+    before the simulation starts) and reads the rest from `config_param`. Used as
+    the context portion of each row appended to the cross-run summary CSV.
+    """
+    method = os.environ.get("PROPAGATION_METHOD", "")
+    try:
+        k_prop = float(os.environ.get("PROPAGATION_K_PROP", "nan"))
+    except ValueError:
+        k_prop = float("nan")
+
+    return {
+        "propagation_method": method,
+        "k_prop": k_prop,
+        "composition_mode": str(TANGENTIAL_COMPOSITION_MODE),
+        "num_agents": int(NUM_AGENTS),
+        "encirclement_radius": float(ENCIRCLEMENT_RADIUS),
+        "sim_duration": float(SIM_DURATION),
+        "init_radius_range": float(INIT_RADIUS_RANGE),
+        "init_angles_equidistant": bool(INIT_ANGLES_EQUIDISTANT),
+        "failure_enable": bool(FAILURE_ENABLE),
+        "failure_mean_per_min": float(FAILURE_MEAN_FAILURES_PER_MIN),
+        "target_swarm_spin_enable": bool(TARGET_SWARM_SPIN_ENABLE),
+        "target_swarm_omega_ref": float(TARGET_SWARM_OMEGA_REF),
+        "protection_angle_deg": float(PROTECTION_ANGLE_DEG),
+        "experiment_reproducible": bool(EXPERIMENT_REPRODUCIBLE),
+    }
+
+
+def append_run_summary(
+    metrics: Dict[str, float],
+    params: MetricParams,
+    summary_csv_path: str = SUMMARY_CSV_DEFAULT_PATH,
+    run_context: Optional[Dict[str, object]] = None,
+) -> None:
+    """Append a single row with this run's metrics + context to a comparative CSV.
+
+    Writes the header line if the file does not yet exist (or is empty), then
+    appends one row. Designed to be safe to call repeatedly across runs.
+    """
+    if run_context is None:
+        run_context = _collect_run_context()
+
+    row = {
+        "run_timestamp_iso": datetime.now().isoformat(timespec="seconds"),
+        "propagation_method": run_context.get("propagation_method", ""),
+        "k_prop": run_context.get("k_prop", float("nan")),
+        "composition_mode": run_context.get("composition_mode", ""),
+        "num_agents": run_context.get("num_agents", ""),
+        "encirclement_radius": run_context.get("encirclement_radius", ""),
+        "sim_duration": run_context.get("sim_duration", ""),
+        "init_radius_range": run_context.get("init_radius_range", ""),
+        "init_angles_equidistant": run_context.get("init_angles_equidistant", ""),
+        "failure_enable": run_context.get("failure_enable", ""),
+        "failure_mean_per_min": run_context.get("failure_mean_per_min", ""),
+        "target_swarm_spin_enable": run_context.get("target_swarm_spin_enable", ""),
+        "target_swarm_omega_ref": run_context.get("target_swarm_omega_ref", ""),
+        "protection_angle_deg": run_context.get("protection_angle_deg", ""),
+        "experiment_reproducible": run_context.get("experiment_reproducible", ""),
+        "metrics_t0": params.t0,
+        "metrics_e_thr": params.e_thr,
+        "metrics_ma_w_sec": params.ma_w,
+        "metrics_settle_window_sec": params.settle_window,
+        "M1_P95_e_pooled": metrics.get("M1_P95_e_pooled", float("nan")),
+        "M2_P95_P95i": metrics.get("M2_P95_P95i", float("nan")),
+        "M3_P95_abs_dedt": metrics.get("M3_P95_abs_dedt", float("nan")),
+        "M4_RMS_osc": metrics.get("M4_RMS_osc", float("nan")),
+        "M5_mean_v2": metrics.get("M5_mean_v2", float("nan")),
+        "M6_Pr_sat": metrics.get("M6_Pr_sat", float("nan")),
+        "M7_settle_median": metrics.get("M7_settle_median", float("nan")),
+        "M7_settle_P95": metrics.get("M7_settle_P95", float("nan")),
+        "M7_settled_frac": metrics.get("M7_settled_frac", float("nan")),
+    }
+
+    existing_header = _read_existing_header(summary_csv_path)
+    if existing_header is not None and existing_header != SUMMARY_COLUMNS:
+        # Schema drift: appending mismatched rows would silently corrupt the table.
+        # Rotate the old file out of the way and start a fresh one with the new schema.
+        ts = datetime.now().strftime("%Y%m%dT%H%M%S")
+        backup_path = f"{summary_csv_path}.bak.{ts}"
+        os.rename(summary_csv_path, backup_path)
+        print(
+            f"[runs_summary] Schema changed; rotated previous file to {os.path.abspath(backup_path)}.\n"
+            f"               New rows will use the updated columns."
+        )
+        existing_header = None
+
+    write_header = existing_header is None
+    with open(summary_csv_path, "a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=SUMMARY_COLUMNS)
+        if write_header:
+            writer.writeheader()
+        writer.writerow(row)
+
+    print(f"\n[runs_summary] Appended 1 row to {os.path.abspath(summary_csv_path)}")
+
+
+def _read_existing_header(csv_path: str) -> Optional[list]:
+    """Return the first row of an existing CSV (treated as the header), or None."""
+    if (not os.path.exists(csv_path)) or os.path.getsize(csv_path) == 0:
+        return None
+    with open(csv_path, "r", newline="", encoding="utf-8") as f:
+        reader = csv.reader(f)
+        try:
+            return next(reader)
+        except StopIteration:
+            return None
+
+
+def main(csv_path: str = CSV_DEFAULT_PATH, summary_csv_path: Optional[str] = None) -> None:
     df = pd.read_csv(csv_path)
 
     params = MetricParams(
@@ -303,6 +463,13 @@ def main(csv_path: str = CSV_DEFAULT_PATH) -> None:
     print_metrics(metrics, params)
 
     plot_per_node(df)
+
+    # Resolve summary path: explicit arg > env var > default. Pass an empty
+    # string (either via arg or env var) to skip the append step.
+    if summary_csv_path is None:
+        summary_csv_path = os.environ.get("RUNS_SUMMARY_CSV_PATH", SUMMARY_CSV_DEFAULT_PATH)
+    if summary_csv_path:
+        append_run_summary(metrics, params, summary_csv_path=summary_csv_path)
 
 
 if __name__ == "__main__":

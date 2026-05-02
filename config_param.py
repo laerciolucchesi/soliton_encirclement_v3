@@ -2,14 +2,21 @@
 
 This module is intended to be the single source of truth for shared
 configuration parameters used across protocols and other components.
+
+A small number of constants accept runtime overrides via environment
+variables (used by batch sweep scripts). Such overrides are applied at
+import time and take precedence over the literal defaults below.
 """
+
+import os as _os
+
 
 # --------------------------------------------------------------------------------------
 # 1) Simulation framework (timing + simulator timers)
 # --------------------------------------------------------------------------------------
 
 # Base control loop period (seconds) for the "muscular" u controller.
-CONTROL_PERIOD: float = 0.01
+CONTROL_PERIOD: float = 0.05
 
 # TargetState broadcast period (seconds). Keep equal to control loop by default.
 TARGET_STATE_BROADCAST_PERIOD: float = CONTROL_PERIOD
@@ -25,7 +32,7 @@ TARGET_STATE_BROADCAST_TIMER_STR: str = "broadcast_timer"
 ADVERSARY_STATE_BROADCAST_TIMER_STR: str = "adversary_state_broadcast_timer"
 
 # Simulation defaults (used by main simulation entrypoints)
-SIM_DURATION: float = 60          # Simulation duration (seconds)
+SIM_DURATION: float = 300          # Simulation duration (seconds)
 SIM_REAL_TIME: bool = False          # Run in real time
 SIM_DEBUG: bool = False             # Enable simulator debug mode
 
@@ -47,7 +54,7 @@ COMMUNICATION_DELAY: float = 0.0               # Communication delay (seconds)
 COMMUNICATION_FAILURE_RATE: float = 0.0        # Packet loss probability [0.0, 1.0]
 
 # Visualization defaults (used by main simulation entrypoints)
-VIS_OPEN_BROWSER: bool = True       # Open the visualization in a browser
+VIS_OPEN_BROWSER: bool = False       # Open the visualization in a browser
 VIS_UPDATE_RATE: float = 0.1        # Visualization update period (seconds)
 
 # --------------------------------------------------------------------------------------
@@ -129,6 +136,20 @@ PRUNE_EXPIRED_STATES: bool = True
 NUM_AGENTS: int = 10                # Number of agent nodes
 ENCIRCLEMENT_RADIUS: float = 20.0   # Desired encirclement radius in meters
 
+# Initial agent placement controls (consumed by main.py when spawning agent nodes).
+#
+# INIT_RADIUS_RANGE: half-width of the uniform radius scatter, expressed as a
+# fraction of ENCIRCLEMENT_RADIUS. Each agent's initial radius is drawn from
+#   r_i ~ Uniform((1 - INIT_RADIUS_RANGE), (1 + INIT_RADIUS_RANGE)) * ENCIRCLEMENT_RADIUS.
+# Set to 0.0 to place every agent exactly at ENCIRCLEMENT_RADIUS. Default 0.1
+# reproduces the legacy [0.9, 1.1] * R scatter.
+#
+# INIT_ANGLES_EQUIDISTANT: if False, initial angles are drawn uniformly in
+# [0, 2*pi). If True, agents are placed at equidistant angles 2*pi/NUM_AGENTS apart
+# starting from 0 rad.
+INIT_RADIUS_RANGE: float = 0.1
+INIT_ANGLES_EQUIDISTANT: bool = False
+
 # Desired angular velocity for the whole swarm to spin around the target (rad/s).
 # This value is broadcast by the target inside TargetState.
 TARGET_SWARM_OMEGA_REF: float = 0.0
@@ -150,7 +171,7 @@ TARGET_SWARM_OMEGA_REF: float = 0.0
 # - PROTECTION_ANGLE_DEG = 360 means edge_gap_deg = 0 => no boundary arc (uniform lambdas=1).
 # - If edge_gap_deg is smaller than the uniform gap (360/alive_count), then edge_lambda < 1 and
 #   the boundary arc is the *smallest* gap (the token should track the minimum gap, not maximum).
-PROTECTION_ANGLE_DEG: float = 90.0
+PROTECTION_ANGLE_DEG: float = 360.0
 
 # Minimum effective radius used by the tangential mapping to avoid division by
 # near-zero radii and to keep the angular-rate interpretation well-conditioned.
@@ -205,6 +226,21 @@ BETA_U_PROP: float = 7.0    # damping for the propagated error channel
 K_E_TAU: float = 25.0       # spacing error injection gain (e_tau multiplier)
 U_CONFLICT_BLEND_WIDTH: float = 0.2  # 0.0 restores the previous hard winner-takes-all conflict composition
 
+# Composition policy for u_local + u_prop in TangentialSpacingController._compose:
+# - "blend": cooperative sum when channels agree in sign; smooth tanh dominance
+#            blend (width = U_CONFLICT_BLEND_WIDTH) when they conflict. Defensive
+#            against noisy propagation: discards the smaller channel in conflict.
+# - "sum":   pure addition u = u_local + u_prop, regardless of sign. The propagation
+#            channel always contributes — closer to the soliton-inspired premise
+#            that neighbor signals carry useful information.
+# No saturation is applied at the controller level in either mode; velocity-level
+# saturation in the mobility handler (VM_MAX_SPEED_XY) remains the only limit.
+#
+# Runtime override: env var TANGENTIAL_COMPOSITION_MODE takes precedence over the
+# literal default below. Used by run_sweep.py to vary the mode across runs without
+# editing this file. Invalid values are caught later, at controller construction.
+TANGENTIAL_COMPOSITION_MODE: str = _os.environ.get("TANGENTIAL_COMPOSITION_MODE", "sum")  # "blend" or "sum"
+
 # Optional local angular-rate damping (no global information required).
 # Use e_tau_eff instead of e_tau in the u update above.
 # When enabled, the agent forms an omega reference from its two neighbors and
@@ -222,7 +258,7 @@ K_OMEGA_DAMP: float = 0.1  # angular-rate damping gain (0.0 to disable); default
 #   broadcast omega_ref = TARGET_SWARM_OMEGA_REF (typically 0.0 for no spin).
 # - If True: omega_ref is generated by the PD controller below (with optional open-loop
 #   bias when KP=KD=0).
-TARGET_SWARM_SPIN_ENABLE: bool = True
+TARGET_SWARM_SPIN_ENABLE: bool = False
 
 # PD controller for omega_ref generation (based on angular error in radians).
 # - If KP=KD=0: omega_ref = TARGET_SWARM_OMEGA_REF (pure open-loop spin)
