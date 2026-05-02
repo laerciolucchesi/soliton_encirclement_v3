@@ -21,7 +21,7 @@ except Exception:  # pragma: no cover
 
 import json
 
-from propagation_layer import create_propagation_layer
+from propagation_layer import create_propagation_layer, DampedAdvectionLayer
 
 from config_param import (
     CONTROL_LOOP_TIMER_STR,
@@ -52,6 +52,10 @@ from config_param import (
     FAILURE_OFF_TIME,
     FAILURE_RECOVER_TIMER_STR,
     EXPERIMENT_REPRODUCIBLE,
+    WAVE_DAMPING_GAMMA,
+    K_TRIGGER,
+    MIN_EVENT_DELTA_FRAC,
+    FAST_CHANNEL_WARMUP_SEC,
     )
 
 
@@ -154,6 +158,25 @@ class AgentProtocol(IProtocol):
         self.prop_layer = create_propagation_layer(_prop_method, _prop_params)
         self._prop_k_prop: float = _prop_k_prop
         self.last_prop_signal: float = 0.0
+
+        # Fast soliton-like channel — runs in PARALLEL with the main prop_layer.
+        # Phase A: observational only (does NOT enter u_total). Pulses are
+        # injected on detected events (neighbor identity changes); the field
+        # values are logged to telemetry and visualized post-hoc.
+        self.fast_layer = DampedAdvectionLayer(params={"gamma": WAVE_DAMPING_GAMMA})
+        # Track previous neighbor identities so we can detect transitions tick-to-tick.
+        self._last_pred_id_for_event: Optional[int] = None
+        self._last_succ_id_for_event: Optional[int] = None
+        # Track previous e_tau to compute delta on each tick.
+        self._last_e_tau_for_event: float = 0.0
+        # Sparse event log (failure_start, failure_end, pulse_injected). Flushed
+        # to events.csv in finish().
+        self._event_rows: list = []
+        self._events_csv_path: Optional[str] = os.environ.get("EVENTS_LOG_CSV_PATH")
+        if not self._events_csv_path:
+            self._events_csv_path = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "events.csv"
+            )
 
         # Last commanded velocity (world coordinates).
         self.desired_velocity: Tuple[float, float, float] = (0.0, 0.0, 0.0)
@@ -386,6 +409,42 @@ class AgentProtocol(IProtocol):
 
         return float(e_tau), float(e_tau_eff), float(e_tau_used)
 
+    def _compute_desired_gap_self(self) -> float:
+        """Return the agent's own desired arc (radians) at equilibrium.
+
+        Uses the latest TargetState.alive_lambdas: each agent's lambda is its
+        weight in the total 2*pi arc budget. Falls back to 2*pi/N when target
+        broadcast is unavailable (with N estimated from cached agent_states).
+        """
+        two_pi = 2.0 * math.pi
+        if self.target_state is not None:
+            ts, _ = self.target_state
+            lambdas = getattr(ts, "alive_lambdas", None) or {}
+            if isinstance(lambdas, dict) and lambdas:
+                # Robust to int/str keys (JSON parses ints into strings).
+                lam_self = lambdas.get(self.node_id)
+                if lam_self is None:
+                    lam_self = lambdas.get(str(int(self.node_id)))
+                total = 0.0
+                for v in lambdas.values():
+                    try:
+                        fv = float(v)
+                    except Exception:
+                        continue
+                    if math.isfinite(fv):
+                        total += fv
+                if (
+                    lam_self is not None
+                    and total > 1e-9
+                    and math.isfinite(float(lam_self))
+                ):
+                    return two_pi * float(lam_self) / total
+        # Fallback: 2*pi/N estimated from local cache (self + alive neighbors).
+        n_est = 1 + len(self.agent_states)
+        if n_est < 2:
+            n_est = 2
+        return two_pi / float(n_est)
+
     def _update_neighbor_lps_from_target(self) -> None:
         """Update lp_pred/lp_succ using the latest TargetState.alive_lambdas."""
         if self.target_state is None:
@@ -616,6 +675,14 @@ class AgentProtocol(IProtocol):
             if p > 0.0 and draw < p:
                 self._failed = True
 
+                # Log failure_start event for the heatmap overlay.
+                self._event_rows.append({
+                    "timestamp": float(self.provider.current_time()),
+                    "node_id": int(self.node_id),
+                    "event_type": "failure_start",
+                    "amplitude": 0.0,
+                })
+
                 if self._vis is not None:
                     try:
                         self._vis.paint_node(self.node_id, (255.0, 0.0, 0.0))
@@ -645,9 +712,23 @@ class AgentProtocol(IProtocol):
         if timer == FAILURE_RECOVER_TIMER_STR:
             self._failed = False
             self.prop_layer.on_reset()
+            self.fast_layer.on_reset()
             self.last_prop_signal = 0.0
             self.u_local = 0.0
             self.u_prop = 0.0
+            # Clear last-seen identity so the next tick doesn't fire a spurious
+            # "neighbor changed" pulse from comparing pre-failure state to post-recovery.
+            self._last_pred_id_for_event = None
+            self._last_succ_id_for_event = None
+            self._last_e_tau_for_event = 0.0
+
+            # Log failure_end event for the heatmap overlay.
+            self._event_rows.append({
+                "timestamp": float(self.provider.current_time()),
+                "node_id": int(self.node_id),
+                "event_type": "failure_end",
+                "amplitude": 0.0,
+            })
 
             if self._vis is not None:
                 try:
@@ -755,6 +836,56 @@ class AgentProtocol(IProtocol):
                 _neighbor_sig = self.prop_layer.get_neighbor_signal()
                 self.last_prop_signal = float(_neighbor_sig) if math.isfinite(_neighbor_sig) else 0.0
 
+                # Fast soliton-like channel — runs in parallel, observation-only.
+                # Read neighbor fast_state, advect, and (after) detect events to
+                # decide whether to inject a pulse this tick.
+                _pred_fast = self.neighbor_pred_state.fast_state if self.neighbor_pred_state is not None else None
+                _succ_fast = self.neighbor_succ_state.fast_state if self.neighbor_succ_state is not None else None
+                self.fast_layer.update(
+                    e_tau=0.0,  # ignored by DampedAdvectionLayer; pulses are external
+                    dt=float(self.control_period),
+                    pred_state=_pred_fast,
+                    succ_state=_succ_fast,
+                )
+
+                # Event detection: predecessor or successor identity changed
+                # since the previous tick. Fire a single pulse with amplitude
+                # proportional to delta_e_tau (signed).
+                # Suppress firing during the initial warmup window — neighbor
+                # identities take a few ticks to settle as broadcasts arrive,
+                # producing spurious "changes" that are not real events.
+                pred_changed = (
+                    self._last_pred_id_for_event is not None
+                    and self.neighbor_pred_id is not None
+                    and self.neighbor_pred_id != self._last_pred_id_for_event
+                )
+                succ_changed = (
+                    self._last_succ_id_for_event is not None
+                    and self.neighbor_succ_id is not None
+                    and self.neighbor_succ_id != self._last_succ_id_for_event
+                )
+                in_warmup = float(now) < float(FAST_CHANNEL_WARMUP_SEC)
+                if (pred_changed or succ_changed) and not in_warmup:
+                    delta_e = float(e_tau) - float(self._last_e_tau_for_event)
+                    # Threshold scales with the agent's own desired arc, computed
+                    # from the broadcast lambdas. N-agnostic by construction.
+                    desired_gap_self = self._compute_desired_gap_self()
+                    threshold = float(MIN_EVENT_DELTA_FRAC) * desired_gap_self
+                    if math.isfinite(delta_e) and abs(delta_e) > threshold:
+                        amplitude = float(K_TRIGGER) * delta_e
+                        self.fast_layer.inject_pulse(amplitude)
+                        self._event_rows.append({
+                            "timestamp": float(self.provider.current_time()),
+                            "node_id": int(self.node_id),
+                            "event_type": "pulse_injected",
+                            "amplitude": float(amplitude),
+                        })
+
+                # Update event-trigger memory for next tick.
+                self._last_pred_id_for_event = self.neighbor_pred_id
+                self._last_succ_id_for_event = self.neighbor_succ_id
+                self._last_e_tau_for_event = float(e_tau)
+
                 tangential_output = self.tangential_controller.update(
                     measurement=float(e_tau_used),
                     dt=float(self.control_period),
@@ -808,6 +939,7 @@ class AgentProtocol(IProtocol):
                 u=self.u,
                 u_ss=self.u_ss,
                 prop_state=self.prop_layer.get_broadcast_state(),
+                fast_state=self.fast_layer.get_broadcast_state(),
             )
             message_json = agent_state.to_json()
             command = CommunicationCommand(CommunicationCommandType.BROADCAST, message_json)
@@ -934,6 +1066,17 @@ class AgentProtocol(IProtocol):
 
         v_norm = float(math.sqrt(vx * vx + vy * vy + vz * vz))
 
+        # Position relative to target (for spatial ordering in heatmaps).
+        # Computed defensively: 0.0 if target state is missing.
+        theta_rel = 0.0
+        if self.velocity_handler and self.target_state is not None:
+            try:
+                pos = self.velocity_handler.get_node_position(self.node_id)
+                ts, _ = self.target_state
+                theta_rel = float(self._theta_2d(ts.position, pos))
+            except Exception:
+                theta_rel = 0.0
+
         self._telemetry_rows.append(
             {
                 "node_id": int(self.node_id),
@@ -959,25 +1102,52 @@ class AgentProtocol(IProtocol):
                 "e_tau_eff": float(self.last_e_tau_eff),
 
                 "velocity_norm": v_norm,
+
+                # Fast-channel observation (Phase A: not used in u_total)
+                "u_R": float(self.fast_layer.u_R),
+                "u_L": float(self.fast_layer.u_L),
+                "fast_signal": float(self.fast_layer.get_signal()),
+
+                # Spatial position around target for heatmap ordering
+                "theta_rel": float(theta_rel),
             }
         )
 
     def finish(self):
-        if not self._csv_path or not self._telemetry_rows:
-            return
+        if self._csv_path and self._telemetry_rows:
+            try:
+                df = pd.DataFrame(self._telemetry_rows)
+                file_exists = os.path.exists(self._csv_path)
+                df.to_csv(self._csv_path, mode="a", header=not file_exists, index=False)
+            except Exception as exc:
+                self._logger.warning(
+                    "Agent %s: failed to write telemetry CSV (%s): %r",
+                    getattr(self, "node_id", "?"),
+                    exc,
+                    self._csv_path,
+                )
 
-        try:
-            df = pd.DataFrame(self._telemetry_rows)
-
-            file_exists = os.path.exists(self._csv_path)
-            df.to_csv(self._csv_path, mode="a", header=not file_exists, index=False)
-        except Exception as exc:
-            self._logger.warning(
-                "Agent %s: failed to write telemetry CSV (%s): %r",
-                getattr(self, "node_id", "?"),
-                exc,
-                self._csv_path,
-            )
+        # Append sparse event log (failure_start, failure_end, pulse_injected).
+        if self._events_csv_path and self._event_rows:
+            try:
+                df_events = pd.DataFrame(
+                    self._event_rows,
+                    columns=["timestamp", "node_id", "event_type", "amplitude"],
+                )
+                file_exists = os.path.exists(self._events_csv_path)
+                df_events.to_csv(
+                    self._events_csv_path,
+                    mode="a",
+                    header=not file_exists,
+                    index=False,
+                )
+            except Exception as exc:
+                self._logger.warning(
+                    "Agent %s: failed to write events CSV (%s): %r",
+                    getattr(self, "node_id", "?"),
+                    exc,
+                    self._events_csv_path,
+                )
 
 
 

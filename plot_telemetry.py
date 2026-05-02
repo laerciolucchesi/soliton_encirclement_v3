@@ -56,6 +56,7 @@ from config_param import (
 
 CSV_DEFAULT_PATH = "agent_telemetry.csv"
 SUMMARY_CSV_DEFAULT_PATH = "runs_summary.csv"
+EVENTS_CSV_DEFAULT_PATH = "events.csv"
 
 # Column order for the cross-run summary CSV. Keep stable: appending a new row to
 # an existing file with a different header would corrupt the table.
@@ -300,14 +301,17 @@ def print_metrics(metrics: Dict[str, float], params: MetricParams) -> None:
     )
 
 
-def plot_per_node(df: pd.DataFrame) -> None:
+def plot_per_node(df: pd.DataFrame, df_events: Optional[pd.DataFrame] = None) -> None:
+    has_fast = ("u_R" in df.columns) and ("u_L" in df.columns)
+    n_subplots = 4 if has_fast else 3
+
     for node_id, g in df.groupby("node_id", sort=True):
         g = g.sort_values("timestamp")
         t = g["timestamp"].to_numpy(dtype=float)
         has_u_local = "u_local" in g.columns
         has_u_prop = "u_prop" in g.columns
 
-        fig, axes = plt.subplots(3, 1, sharex=True, figsize=(12, 8))
+        fig, axes = plt.subplots(n_subplots, 1, sharex=True, figsize=(12, 2.5 * n_subplots))
         fig.suptitle(f"Node {int(node_id)} telemetry")
 
         axes[0].plot(t, g["e_tau"].to_numpy(dtype=float))
@@ -326,13 +330,315 @@ def plot_per_node(df: pd.DataFrame) -> None:
 
         axes[2].plot(t, g["velocity_norm"].to_numpy(dtype=float))
         axes[2].set_ylabel("velocity_norm")
-        axes[2].set_xlabel("time [s]")
         axes[2].grid(True)
 
+        if has_fast:
+            ax_fast = axes[3]
+            ax_fast.plot(t, g["u_R"].to_numpy(dtype=float), label="u_R (CCW-traveling)", color="tab:red", alpha=0.85)
+            ax_fast.plot(t, g["u_L"].to_numpy(dtype=float), label="u_L (CW-traveling)", color="tab:blue", alpha=0.85)
+            ax_fast.axhline(0.0, color="0.5", linewidth=0.6, alpha=0.5)
+            # Mark pulse_injected events fired by THIS node.
+            if df_events is not None and not df_events.empty:
+                ev_node = df_events[
+                    (df_events["node_id"] == int(node_id))
+                    & (df_events["event_type"] == "pulse_injected")
+                ]
+                if not ev_node.empty:
+                    for _, ev in ev_node.iterrows():
+                        ax_fast.axvline(
+                            float(ev["timestamp"]),
+                            color="black",
+                            linestyle="--",
+                            linewidth=0.7,
+                            alpha=0.55,
+                        )
+            ax_fast.set_ylabel("fast channel")
+            ax_fast.legend(loc="best", fontsize=8)
+            ax_fast.grid(True)
+
+        axes[-1].set_xlabel("time [s]")
+
         plt.tight_layout(rect=[0, 0, 1, 0.97])
-        # plt.show()
         plt.savefig(f"node_{int(node_id)}_telemetry.png")
         plt.close(fig)
+
+
+def _build_node_order(df: pd.DataFrame) -> list:
+    """Return nodes ordered by their initial angular position around the target.
+
+    Falls back to numeric node_id ordering if theta_rel column is unavailable.
+    """
+    if "theta_rel" not in df.columns:
+        return sorted(df["node_id"].unique().tolist())
+
+    # Use the earliest timestamp's theta_rel for each node as the spatial coordinate.
+    first_per_node = df.sort_values("timestamp").groupby("node_id").first()
+    if "theta_rel" not in first_per_node.columns:
+        return sorted(df["node_id"].unique().tolist())
+
+    pairs = [
+        (int(node_id), float(row.get("theta_rel", 0.0)))
+        for node_id, row in first_per_node.iterrows()
+    ]
+    pairs.sort(key=lambda p: (p[1], p[0]))
+    return [p[0] for p in pairs]
+
+
+def plot_spatiotemporal_heatmap(
+    df: pd.DataFrame,
+    df_events: Optional[pd.DataFrame] = None,
+    out_path: str = "fast_channel_heatmap.png",
+    title: Optional[str] = None,
+    t_range: Optional[tuple] = None,
+) -> None:
+    """Spatiotemporal heatmap of the fast-channel field across nodes vs time.
+
+    Two stacked subplots:
+      top   - u_R   (CCW-traveling component; sources to the CW side)
+      bottom- u_L   (CW-traveling component;  sources to the CCW side)
+
+    Y axis is ordered by initial angular position (so vertical adjacency
+    reflects ring adjacency).  Overlays mark failure events (X / O on the
+    failed/recovered node) and pulse injections (small triangles).
+
+    When ``t_range=(t_lo, t_hi)`` is provided, the data and event overlays are
+    cropped to that window — useful for zoomed views around specific events.
+    """
+    if "u_R" not in df.columns or "u_L" not in df.columns:
+        print("[heatmap] skipped — telemetry has no u_R/u_L columns")
+        return
+
+    # Optionally crop to a time window for zoom plots.
+    if t_range is not None:
+        t_lo, t_hi = float(t_range[0]), float(t_range[1])
+        df = df[(df["timestamp"] >= t_lo) & (df["timestamp"] <= t_hi)].copy()
+        if df_events is not None:
+            df_events = df_events[
+                (df_events["timestamp"] >= t_lo)
+                & (df_events["timestamp"] <= t_hi)
+            ].copy()
+        if df.empty:
+            print(f"[heatmap] skipped — no data in t_range=[{t_lo:.3f}, {t_hi:.3f}]")
+            return
+
+    node_order = _build_node_order(df)
+    if not node_order:
+        print("[heatmap] skipped — no nodes in telemetry")
+        return
+
+    # Build a uniform time grid (use the median dt across the run).
+    times_sorted = np.sort(df["timestamp"].unique().astype(float))
+    if times_sorted.size < 2:
+        print("[heatmap] skipped — need at least 2 distinct timestamps")
+        return
+    dt_med = float(np.median(np.diff(times_sorted)))
+    if dt_med <= 0.0 or not math.isfinite(dt_med):
+        dt_med = 0.05
+    t_min = float(times_sorted[0])
+    t_max = float(times_sorted[-1])
+    n_t = int(round((t_max - t_min) / dt_med)) + 1
+    if n_t < 2:
+        return
+    t_grid = np.linspace(t_min, t_max, n_t)
+
+    # Resample each node onto the common time grid.
+    n_nodes = len(node_order)
+    UR = np.zeros((n_nodes, n_t), dtype=float)
+    UL = np.zeros((n_nodes, n_t), dtype=float)
+    for row_idx, nid in enumerate(node_order):
+        g = df[df["node_id"] == nid].sort_values("timestamp")
+        if g.empty:
+            continue
+        t_n = g["timestamp"].to_numpy(dtype=float)
+        UR[row_idx, :] = np.interp(t_grid, t_n, g["u_R"].to_numpy(dtype=float))
+        UL[row_idx, :] = np.interp(t_grid, t_n, g["u_L"].to_numpy(dtype=float))
+
+    # Symmetric color scale based on the absolute peak of either field.
+    vmax = float(max(np.nanmax(np.abs(UR)), np.nanmax(np.abs(UL)), 1e-9))
+
+    fig, axes = plt.subplots(2, 1, sharex=True, figsize=(13, 8))
+    fig.suptitle(title or "Fast channel — spatiotemporal field (Phase A: observation only)")
+
+    extent = [t_min, t_max, -0.5, n_nodes - 0.5]
+    im0 = axes[0].imshow(
+        UR, aspect="auto", origin="lower", extent=extent,
+        cmap="RdBu_r", vmin=-vmax, vmax=vmax, interpolation="nearest",
+    )
+    axes[0].set_ylabel("node (CCW order)")
+    axes[0].set_title("u_R  (CCW-traveling: source to the CW side)")
+    plt.colorbar(im0, ax=axes[0], shrink=0.85)
+
+    im1 = axes[1].imshow(
+        UL, aspect="auto", origin="lower", extent=extent,
+        cmap="RdBu_r", vmin=-vmax, vmax=vmax, interpolation="nearest",
+    )
+    axes[1].set_ylabel("node (CCW order)")
+    axes[1].set_xlabel("time [s]")
+    axes[1].set_title("u_L  (CW-traveling: source to the CCW side)")
+    plt.colorbar(im1, ax=axes[1], shrink=0.85)
+
+    # Y-tick labels show actual node IDs in their angular order.
+    yticks = list(range(n_nodes))
+    ylabels = [str(nid) for nid in node_order]
+    for ax in axes:
+        ax.set_yticks(yticks)
+        ax.set_yticklabels(ylabels)
+
+    # Overlay events on both subplots.
+    if df_events is not None and not df_events.empty:
+        node_to_row = {nid: idx for idx, nid in enumerate(node_order)}
+
+        for ev_type, marker, color, label in [
+            ("failure_start", "X", "black", "node failed"),
+            ("failure_end",   "o", "black", "node recovered"),
+        ]:
+            ev_sub = df_events[df_events["event_type"] == ev_type]
+            if ev_sub.empty:
+                continue
+            xs, ys = [], []
+            for _, ev in ev_sub.iterrows():
+                nid = int(ev["node_id"])
+                if nid in node_to_row:
+                    xs.append(float(ev["timestamp"]))
+                    ys.append(node_to_row[nid])
+            if xs:
+                for ax in axes:
+                    ax.scatter(
+                        xs, ys, marker=marker, s=60,
+                        facecolors=("none" if marker == "o" else color),
+                        edgecolors=color, linewidths=1.6,
+                        label=label,
+                    )
+
+        ev_pulse = df_events[df_events["event_type"] == "pulse_injected"]
+        if not ev_pulse.empty:
+            xs_pos, ys_pos, xs_neg, ys_neg = [], [], [], []
+            for _, ev in ev_pulse.iterrows():
+                nid = int(ev["node_id"])
+                if nid not in node_to_row:
+                    continue
+                t_ev = float(ev["timestamp"])
+                y_ev = node_to_row[nid]
+                if float(ev["amplitude"]) >= 0.0:
+                    xs_pos.append(t_ev); ys_pos.append(y_ev)
+                else:
+                    xs_neg.append(t_ev); ys_neg.append(y_ev)
+            for ax in axes:
+                if xs_pos:
+                    ax.scatter(
+                        xs_pos, ys_pos, marker="^", s=44,
+                        facecolors="white", edgecolors="black", linewidths=1.0,
+                        label="pulse +",
+                    )
+                if xs_neg:
+                    ax.scatter(
+                        xs_neg, ys_neg, marker="v", s=44,
+                        facecolors="white", edgecolors="black", linewidths=1.0,
+                        label="pulse -",
+                    )
+
+        # Single combined legend on the top axis (avoid duplicating across axes).
+        handles, labels_seen = axes[0].get_legend_handles_labels()
+        unique = dict()
+        for h, l in zip(handles, labels_seen):
+            unique.setdefault(l, h)
+        if unique:
+            axes[0].legend(unique.values(), unique.keys(), loc="upper right", fontsize=8)
+
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    plt.savefig(out_path, dpi=120)
+    plt.close(fig)
+    print(f"[heatmap] saved {out_path}")
+
+
+def plot_event_timeline(
+    df_events: pd.DataFrame,
+    out_path: str = "events_timeline.png",
+) -> None:
+    """Compact chronological view of all simulation events."""
+    if df_events is None or df_events.empty:
+        print("[events_timeline] skipped — no events recorded")
+        return
+
+    node_ids = sorted(df_events["node_id"].unique().tolist())
+    fig, ax = plt.subplots(figsize=(13, 4))
+
+    style = {
+        "failure_start":  ("X", "red",   60, "fail"),
+        "failure_end":    ("o", "green", 60, "recover"),
+        "pulse_injected": ("^", "blue",  36, "pulse"),
+    }
+    for ev_type, (marker, color, size, label) in style.items():
+        sub = df_events[df_events["event_type"] == ev_type]
+        if sub.empty:
+            continue
+        ax.scatter(
+            sub["timestamp"].astype(float),
+            sub["node_id"].astype(int),
+            marker=marker, c=color, s=size, label=label, alpha=0.8,
+        )
+
+    ax.set_yticks(node_ids)
+    ax.set_xlabel("time [s]")
+    ax.set_ylabel("node id")
+    ax.set_title("Event timeline")
+    ax.grid(True, axis="x", alpha=0.3)
+    ax.legend(loc="upper right", fontsize=8)
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=120)
+    plt.close(fig)
+    print(f"[events_timeline] saved {out_path}")
+
+
+def plot_spatiotemporal_zoom_around_failures(
+    df: pd.DataFrame,
+    df_events: pd.DataFrame,
+    t_window: float = 2.0,
+) -> None:
+    """Generate one zoomed heatmap per failure_start event.
+
+    Each plot covers a window of ``t_window`` seconds centered on the failure
+    timestamp. At this scale the soliton-like diagonal stripes are visible
+    (pulse propagation at one hop per tick traverses the ring in N*dt ~ 0.5 s
+    for N=10, dt=0.05 — a clear diagonal across the y-axis).
+    """
+    if df_events is None or df_events.empty:
+        return
+    failures = df_events[df_events["event_type"] == "failure_start"]
+    if failures.empty:
+        return
+
+    half = float(t_window) / 2.0
+    for _, ev in failures.iterrows():
+        t_center = float(ev["timestamp"])
+        node_id = int(ev["node_id"])
+        t_lo = max(0.0, t_center - half)
+        t_hi = t_center + half
+        out_path = f"fast_channel_zoom_t{t_center:06.2f}_node{node_id}.png"
+        title = (
+            f"Fast channel zoom — node {node_id} fails at t={t_center:.2f}s "
+            f"(window {t_lo:.2f}-{t_hi:.2f}s)"
+        )
+        plot_spatiotemporal_heatmap(
+            df,
+            df_events=df_events,
+            out_path=out_path,
+            title=title,
+            t_range=(t_lo, t_hi),
+        )
+
+
+def _load_events_csv(path: str) -> Optional[pd.DataFrame]:
+    if not os.path.exists(path) or os.path.getsize(path) == 0:
+        return None
+    try:
+        df = pd.read_csv(path)
+        if df.empty:
+            return None
+        return df
+    except Exception as exc:
+        print(f"[events] failed to read {path}: {exc}")
+        return None
 
 
 
@@ -462,7 +768,15 @@ def main(csv_path: str = CSV_DEFAULT_PATH, summary_csv_path: Optional[str] = Non
     metrics = compute_metrics(df, params)
     print_metrics(metrics, params)
 
-    plot_per_node(df)
+    # Load sparse event log for the fast-channel visualizations.
+    events_csv_path = os.environ.get("EVENTS_LOG_CSV_PATH", EVENTS_CSV_DEFAULT_PATH)
+    df_events = _load_events_csv(events_csv_path)
+
+    plot_per_node(df, df_events=df_events)
+    plot_spatiotemporal_heatmap(df, df_events=df_events)
+    if df_events is not None:
+        plot_event_timeline(df_events)
+        plot_spatiotemporal_zoom_around_failures(df, df_events, t_window=2.0)
 
     # Resolve summary path: explicit arg > env var > default. Pass an empty
     # string (either via arg or env var) to skip the append step.

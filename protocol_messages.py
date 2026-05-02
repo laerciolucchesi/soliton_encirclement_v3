@@ -13,7 +13,7 @@ class AgentState:
 
     TYPE = "AgentState"
 
-    def __init__(self, agent_id, seq, position, velocity, u, u_ss=0.0, prop_state=None):
+    def __init__(self, agent_id, seq, position, velocity, u, u_ss=0.0, prop_state=None, fast_state=None):
         self.agent_id = agent_id
         self.seq = seq
         self.position = position  # (x, y, z)
@@ -23,6 +23,10 @@ class AgentState:
         self.u_ss = u_ss
         # Propagation layer state (method-specific dict; empty for baseline)
         self.prop_state: dict = prop_state if isinstance(prop_state, dict) else {}
+        # Fast-channel (DampedAdvectionLayer) broadcast state. Independent of
+        # prop_state so the parallel observational layer doesn't collide with
+        # the user-selected main propagation method.
+        self.fast_state: dict = fast_state if isinstance(fast_state, dict) else {}
 
     def to_json(self) -> str:
         return json.dumps(
@@ -35,6 +39,7 @@ class AgentState:
                 "u": self.u,
                 "u_ss": self.u_ss,
                 "prop_state": self.prop_state,
+                "fast_state": self.fast_state,
                 "sender_id": self.agent_id,
             }
         )
@@ -55,6 +60,7 @@ class AgentState:
             u=message_dict["u"],
             u_ss=message_dict.get("u_ss", 0.0),
             prop_state=message_dict.get("prop_state") or {},
+            fast_state=message_dict.get("fast_state") or {},
         )
 
 
