@@ -165,6 +165,13 @@ def main():
     with open(target_csv_path, "w", encoding="utf-8") as f:
         f.write("timestamp,E_r,E_vr,rho,G_max,E_gap\n")
 
+    # Sparse event log for the fast soliton-like channel observations.
+    # Each agent appends rows in finish(); we wipe the file so each run is fresh.
+    events_csv_path = os.path.join(os.getcwd(), "events.csv")
+    os.environ["EVENTS_LOG_CSV_PATH"] = events_csv_path
+    if os.path.exists(events_csv_path):
+        os.remove(events_csv_path)
+
     duration = SIM_DURATION        # Simulation duration (seconds)
     real_time = SIM_REAL_TIME      # Run in real time (True) or as-fast-as-possible (False)
     debug = SIM_DEBUG              # Enable simulator debug mode

@@ -719,6 +719,93 @@ class BurgersLayer(PropagationLayer):
 
 
 # ---------------------------------------------------------------------------
+# Mecanismo 7: DampedAdvectionLayer — canal soliton-like event-triggered
+# ---------------------------------------------------------------------------
+
+class DampedAdvectionLayer(PropagationLayer):
+    """Bidirectional damped advection field for event-triggered fast propagation.
+
+    Two scalar fields propagate around the ring in opposite directions:
+      u_R: travels pred -> self -> succ (one hop per tick)
+      u_L: travels succ -> self -> pred (one hop per tick)
+
+    Each field is a pure first-order upwind advection with exponential decay:
+      u_R[i](t+dt) = (1 - gamma*dt) * u_R[pred(i)](t)
+      u_L[i](t+dt) = (1 - gamma*dt) * u_L[succ(i)](t)
+
+    Localized pulses, when injected via inject_pulse(), preserve their shape as
+    they propagate (linear advection has no dispersion in the continuous limit).
+    Linear superposition holds: pulses with opposite signs that meet cancel.
+    Damping ensures pulses decay over a finite time, avoiding eternal circulation.
+
+    Unlike the e_tau-driven layers, this layer IGNORES the e_tau argument in
+    update() — pulses are introduced exclusively via inject_pulse() in response
+    to discrete events detected by the agent (e.g. predecessor/successor
+    identity change after a neighbor failure or recovery).
+
+    Designed to be used in PARALLEL with the controller's main propagation layer,
+    not as a replacement. Phase A: observational only (signal logged, not fed
+    into u_total). Phase B: optionally fed into u_total via K_FAST.
+    """
+
+    DEFAULT_PARAMS = {"gamma": 0.5}
+
+    def __init__(self, params: dict | None = None):
+        p = {**self.DEFAULT_PARAMS, **(params or {})}
+        self.gamma = float(p["gamma"])
+        self.u_R: float = 0.0
+        self.u_L: float = 0.0
+
+    def update(self, e_tau, dt, pred_state, succ_state):
+        """Advect from neighbors with exponential decay. Ignores e_tau by design."""
+        dt_f = _safe(dt, 0.05)
+        decay = 1.0 - self.gamma * dt_f
+        if decay < 0.0:
+            decay = 0.0  # guard against pathological dt that would invert sign
+
+        u_R_from_pred = _get(pred_state, "u_R")
+        u_L_from_succ = _get(succ_state, "u_L")
+
+        self.u_R = _safe(decay * u_R_from_pred)
+        self.u_L = _safe(decay * u_L_from_succ)
+
+    def inject_pulse(self, amplitude: float) -> None:
+        """Inject a localized perturbation, propagating in both directions."""
+        amp = _safe(amplitude)
+        self.u_R = _safe(self.u_R + amp)
+        self.u_L = _safe(self.u_L + amp)
+
+    def get_signal(self) -> float:
+        """Net directional signal in tangential-velocity convention.
+
+        Sign convention:
+          positive  -> source is on the succ (CCW) side; agent should move CCW.
+          negative  -> source is on the pred (CW) side; agent should move CW.
+        """
+        return self.u_L - self.u_R
+
+    def get_neighbor_signal(self) -> float:
+        # Same as get_signal: in this layer the local fields ARE what arrived
+        # from neighbors. Self-injected pulses (via inject_pulse) leave the local
+        # node within the next tick and become "neighbor signals" for the next hop.
+        return self.get_signal()
+
+    def get_broadcast_state(self) -> dict:
+        return {"u_R": float(self.u_R), "u_L": float(self.u_L)}
+
+    def on_neighbor_change(self) -> None:
+        # Intentionally NO-OP: pulses in transit through this node should not
+        # be erased just because the topology shifted. The propagation continues
+        # naturally through the new pred/succ.
+        pass
+
+    def on_reset(self) -> None:
+        # When an agent recovers from failure its prior fields are stale.
+        self.u_R = 0.0
+        self.u_L = 0.0
+
+
+# ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
 

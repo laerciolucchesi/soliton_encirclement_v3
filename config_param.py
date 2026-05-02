@@ -32,7 +32,7 @@ TARGET_STATE_BROADCAST_TIMER_STR: str = "broadcast_timer"
 ADVERSARY_STATE_BROADCAST_TIMER_STR: str = "adversary_state_broadcast_timer"
 
 # Simulation defaults (used by main simulation entrypoints)
-SIM_DURATION: float = 300          # Simulation duration (seconds)
+SIM_DURATION: float = 60          # Simulation duration (seconds)
 SIM_REAL_TIME: bool = False          # Run in real time
 SIM_DEBUG: bool = False             # Enable simulator debug mode
 
@@ -54,7 +54,7 @@ COMMUNICATION_DELAY: float = 0.0               # Communication delay (seconds)
 COMMUNICATION_FAILURE_RATE: float = 0.0        # Packet loss probability [0.0, 1.0]
 
 # Visualization defaults (used by main simulation entrypoints)
-VIS_OPEN_BROWSER: bool = False       # Open the visualization in a browser
+VIS_OPEN_BROWSER: bool = True       # Open the visualization in a browser
 VIS_UPDATE_RATE: float = 0.1        # Visualization update period (seconds)
 
 # --------------------------------------------------------------------------------------
@@ -80,7 +80,7 @@ VM_TELEMETRY_DECIMATION: int = 1    # Send telemetry every update
 # changing direction randomly at a fixed period.
 TARGET_MOTION_TIMER_STR: str = "target_motion_timer"
 TARGET_MOTION_PERIOD: float = 1.0        # change velocity direction every this many seconds
-TARGET_MOTION_SPEED_XY: float = 5.0      # target speed (m/s)
+TARGET_MOTION_SPEED_XY: float = 0.0      # target speed (m/s)
 TARGET_MOTION_BOUNDARY_XY: float = 20.0  # meters; if |x| or |y| exceeds this, steer back to (0,0)
 
 # --------------------------------------------------------------------------------------
@@ -92,7 +92,7 @@ ADVERSARY_ROAM_BOUND_XY: float = 40.0
 # Minimum allowed distance between adversary and target in XY (meters)
 ADVERSARY_MIN_TARGET_DISTANCE: float = 30.0
 # Nominal adversary roaming speed in XY (m/s)
-ADVERSARY_ROAM_SPEED_XY: float = 4.0 #4.0
+ADVERSARY_ROAM_SPEED_XY: float = 0.0 #4.0
 
 # --------------------------------------------------------------------------------------
 # 5) Failure injection (agent outages)
@@ -147,8 +147,8 @@ ENCIRCLEMENT_RADIUS: float = 20.0   # Desired encirclement radius in meters
 # INIT_ANGLES_EQUIDISTANT: if False, initial angles are drawn uniformly in
 # [0, 2*pi). If True, agents are placed at equidistant angles 2*pi/NUM_AGENTS apart
 # starting from 0 rad.
-INIT_RADIUS_RANGE: float = 0.1
-INIT_ANGLES_EQUIDISTANT: bool = False
+INIT_RADIUS_RANGE: float = 0.0
+INIT_ANGLES_EQUIDISTANT: bool = True
 
 # Desired angular velocity for the whole swarm to spin around the target (rad/s).
 # This value is broadcast by the target inside TargetState.
@@ -247,6 +247,40 @@ TANGENTIAL_COMPOSITION_MODE: str = _os.environ.get("TANGENTIAL_COMPOSITION_MODE"
 # subtracts a proportional term from the spacing error injection:
 #   e_tau_eff = e_tau - K_OMEGA_DAMP * (omega_self - omega_ref)
 K_OMEGA_DAMP: float = 0.1  # angular-rate damping gain (0.0 to disable); default value = 0.1
+
+
+# --------------------------------------------------------------------------------------
+# 9b) Fast soliton-like channel (event-triggered, observation-only in Phase A)
+# --------------------------------------------------------------------------------------
+
+# DampedAdvectionLayer parameters. The layer maintains two scalar fields per
+# agent (u_R and u_L) propagating in opposite directions around the ring with
+# exponential decay. Pulses are injected externally on detected events
+# (predecessor/successor identity change) and propagate without affecting the
+# control loop in Phase A — they are recorded in telemetry for visualization.
+#
+# WAVE_DAMPING_GAMMA: decay rate of each field (1/s). Half-life ~ 0.69/gamma.
+#   gamma = 6.0 -> half-life 0.115 s. With one-hop-per-tick advection at dt=0.05,
+#   ring traversal is ~N*dt seconds; for N=10 that's 0.5 s, so a pulse decays
+#   to ~e^-3.0 = 5% after one full lap.
+WAVE_DAMPING_GAMMA: float = 6.0
+
+# K_TRIGGER: gain converting the detected delta_e_tau into pulse amplitude.
+# pulse_amplitude = K_TRIGGER * delta_e_tau
+K_TRIGGER: float = 1.0
+
+# MIN_EVENT_DELTA_FRAC: minimum |delta_e_tau| to trigger a pulse, expressed as
+# a fraction of the agent's own desired gap (which the agent computes from the
+# alive_lambdas broadcast by target). N-agnostic by construction.
+#   0.4 means: only fire when delta_e_tau exceeds 40% of the desired arc.
+#   Lowers in larger rings (more agents -> smaller gaps -> smaller threshold).
+MIN_EVENT_DELTA_FRAC: float = 0.4
+
+# FAST_CHANNEL_WARMUP_SEC: simulation-time delay before pulse triggers are armed.
+# During this initial window every agent is still discovering its neighbors and
+# the pred/succ identity can flip a few times spuriously. Suppressing pulses
+# during the warmup avoids flooding the channel with phantom events at startup.
+FAST_CHANNEL_WARMUP_SEC: float = 1.0
 
 
 # --------------------------------------------------------------------------------------
