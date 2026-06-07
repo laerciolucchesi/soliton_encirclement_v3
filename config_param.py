@@ -16,7 +16,15 @@ import os as _os
 # --------------------------------------------------------------------------------------
 
 # Base control loop period (seconds) for the "muscular" u controller.
-CONTROL_PERIOD: float = 0.05
+# env-overridable (dt / control-period study, Fase 2 — colapso adimensional). A single
+# `dt` drives the control loop, the state-broadcast periods (below) AND the mobility
+# update (VM_UPDATE_RATE, tied to it in section 3). Default 0.01 keeps all prior runs identical.
+try:
+    CONTROL_PERIOD: float = float(_os.environ.get("CONTROL_PERIOD", "0.01"))
+except ValueError:
+    CONTROL_PERIOD = 0.01
+if CONTROL_PERIOD <= 0.0:
+    CONTROL_PERIOD = 0.01
 
 # TargetState broadcast period (seconds). Keep equal to control loop by default.
 TARGET_STATE_BROADCAST_PERIOD: float = CONTROL_PERIOD
@@ -32,7 +40,10 @@ TARGET_STATE_BROADCAST_TIMER_STR: str = "broadcast_timer"
 ADVERSARY_STATE_BROADCAST_TIMER_STR: str = "adversary_state_broadcast_timer"
 
 # Simulation defaults (used by main simulation entrypoints)
-SIM_DURATION: float = 60          # Simulation duration (seconds)
+try:
+    SIM_DURATION: float = float(_os.environ.get("SIM_DURATION", "60"))
+except ValueError:
+    SIM_DURATION = 60.0          # Simulation duration (seconds); env-overridable for sweeps
 SIM_REAL_TIME: bool = False          # Run in real time
 SIM_DEBUG: bool = False             # Enable simulator debug mode
 
@@ -50,11 +61,26 @@ EXPERIMENT_REPRODUCIBLE: bool = True
 
 # Communication medium defaults
 COMMUNICATION_TRANSMISSION_RANGE: float = 200  # Communication range (meters)
-COMMUNICATION_DELAY: float = 0.0               # Communication delay (seconds)
-COMMUNICATION_FAILURE_RATE: float = 0.0        # Packet loss probability [0.0, 1.0]
+# env-overridable (Fase 3 - robustez: comunicacao degradada). Defaults 0.0 preservam runs antigos.
+try:
+    COMMUNICATION_DELAY: float = float(_os.environ.get("COMMUNICATION_DELAY", "0.0"))   # Communication delay (seconds)
+except ValueError:
+    COMMUNICATION_DELAY = 0.0
+try:
+    COMMUNICATION_FAILURE_RATE: float = float(_os.environ.get("COMMUNICATION_FAILURE_RATE", "0.0"))  # Packet loss probability [0.0, 1.0]
+except ValueError:
+    COMMUNICATION_FAILURE_RATE = 0.0
+if not (0.0 <= COMMUNICATION_FAILURE_RATE <= 1.0):
+    COMMUNICATION_FAILURE_RATE = 0.0
 
 # Visualization defaults (used by main simulation entrypoints)
-VIS_OPEN_BROWSER: bool = True       # Open the visualization in a browser
+# VIS_OPEN_BROWSER controls whether the GrADyS visualization auto-opens a
+# browser window. Disabling speeds up batch sweeps and avoids spawning
+# windows during Monte Carlo runs.
+VIS_OPEN_BROWSER: bool = (
+    _os.environ.get("VIS_OPEN_BROWSER", "True").strip().lower()
+    in ("true", "1", "yes", "y")
+)
 VIS_UPDATE_RATE: float = 0.1        # Visualization update period (seconds)
 
 # --------------------------------------------------------------------------------------
@@ -62,12 +88,21 @@ VIS_UPDATE_RATE: float = 0.1        # Visualization update period (seconds)
 # --------------------------------------------------------------------------------------
 
 # Velocity mobility default parameters (used by main simulation entrypoints)
-VM_UPDATE_RATE: float = 0.01        # Update every 0.01 seconds
-VM_MAX_SPEED_XY: float = 10.0       # Max horizontal speed: 10 m/s
+VM_UPDATE_RATE: float = CONTROL_PERIOD   # mobility step tied to the control period (dt); was fixed 0.01
+try:
+    VM_MAX_SPEED_XY: float = float(_os.environ.get("VM_MAX_SPEED_XY", "10.0"))  # env-overridable (agility axis)
+except ValueError:
+    VM_MAX_SPEED_XY = 10.0           # Max horizontal speed: 10 m/s
 VM_MAX_SPEED_Z: float = 5.0         # Max vertical speed: 5 m/s
-VM_MAX_ACC_XY: float = 4.0          # Max horizontal acceleration: 4.0 m/s^2
+try:
+    VM_MAX_ACC_XY: float = float(_os.environ.get("VM_MAX_ACC_XY", "4.0"))       # env-overridable (agility axis)
+except ValueError:
+    VM_MAX_ACC_XY = 4.0              # Max horizontal acceleration: 4.0 m/s^2
 VM_MAX_ACC_Z: float = 5.0           # Max vertical acceleration: 5.0 m/s^2
-VM_TAU_XY: float = 1.0              # Optional: 1st-order horizontal tracking time constant (s)
+try:
+    VM_TAU_XY: float = float(_os.environ.get("VM_TAU_XY", "1.0"))               # env-overridable: UAV sluggishness knob (agility axis)
+except ValueError:
+    VM_TAU_XY = 1.0                  # 1st-order horizontal tracking time constant (s)
 VM_TAU_Z: float = 1.2               # Optional: 1st-order vertical tracking time constant (s)
 VM_SEND_TELEMETRY: bool = True      # Enable telemetry
 VM_TELEMETRY_DECIMATION: int = 1    # Send telemetry every update
@@ -79,9 +114,20 @@ VM_TELEMETRY_DECIMATION: int = 1    # Send telemetry every update
 # Move the target with a constant speed setpoint in the XY plane,
 # changing direction randomly at a fixed period.
 TARGET_MOTION_TIMER_STR: str = "target_motion_timer"
-TARGET_MOTION_PERIOD: float = 1.0        # change velocity direction every this many seconds
-TARGET_MOTION_SPEED_XY: float = 0.0      # target speed (m/s)
-TARGET_MOTION_BOUNDARY_XY: float = 20.0  # meters; if |x| or |y| exceeds this, steer back to (0,0)
+# env-overridable (Fase 3 Track C - alvo movel). PERIOD enorme + BOUNDARY grande => ~velocidade
+# constante; PERIOD pequeno (1s) => manobra (direcao aleatoria nova a cada periodo).
+try:
+    TARGET_MOTION_PERIOD: float = float(_os.environ.get("TARGET_MOTION_PERIOD", "1.0"))
+except ValueError:
+    TARGET_MOTION_PERIOD = 1.0
+try:
+    TARGET_MOTION_SPEED_XY: float = float(_os.environ.get("TARGET_MOTION_SPEED_XY", "0.0"))
+except ValueError:
+    TARGET_MOTION_SPEED_XY = 0.0
+try:
+    TARGET_MOTION_BOUNDARY_XY: float = float(_os.environ.get("TARGET_MOTION_BOUNDARY_XY", "20.0"))
+except ValueError:
+    TARGET_MOTION_BOUNDARY_XY = 20.0  # meters; if |x| or |y| exceeds this, steer back to (0,0)
 
 # --------------------------------------------------------------------------------------
 # 4b) Adversary motion (random roaming)
@@ -109,10 +155,68 @@ ADVERSARY_ROAM_SPEED_XY: float = 0.0 #4.0
 # Note: in this project the target never fails; only agents can.
 FAILURE_CHECK_TIMER_STR: str = "failure_check_timer"
 FAILURE_RECOVER_TIMER_STR: str = "failure_recover_timer"
-FAILURE_ENABLE: bool = True           # Whether to enable failure injection
+# env-overridable (Fase 3 - churn): permite varrer densidade de falhas e tempo de recuperacao.
+FAILURE_ENABLE: bool = (
+    _os.environ.get("FAILURE_ENABLE", "True").strip().lower() in ("true", "1", "yes", "y")
+)
 FAILURE_CHECK_PERIOD: float = 0.1     # seconds
-FAILURE_MEAN_FAILURES_PER_MIN: float = 1.0  # mean failures per minute
-FAILURE_OFF_TIME: float = 8.0         # seconds
+try:
+    FAILURE_MEAN_FAILURES_PER_MIN: float = float(
+        _os.environ.get("FAILURE_MEAN_FAILURES_PER_MIN", "2.0")
+    )  # mean failures per minute (per agent stream)
+except ValueError:
+    FAILURE_MEAN_FAILURES_PER_MIN = 2.0
+try:
+    FAILURE_OFF_TIME: float = float(_os.environ.get("FAILURE_OFF_TIME", "8.0"))  # recovery (s)
+except ValueError:
+    FAILURE_OFF_TIME = 8.0
+
+# --------------------------------------------------------------------------------------
+# 5b) Deterministic single-failure mode (controlled-event experiments)
+# --------------------------------------------------------------------------------------
+#
+# For clean post-event measurements (e.g. the stabilization-time-vs-N scaling
+# law), the random Poisson failure stream is too noisy: the number, timing and
+# identity of failures vary run-to-run, so a single recovery cannot be isolated.
+# When DETERMINISTIC_FAILURE_ENABLE is True:
+#   - NO agent ever draws a Poisson failure (the random stream is bypassed for all).
+#   - The single agent whose node_id == DETERMINISTIC_FAILURE_AGENT_ID crashes
+#     exactly once, at the first failure-check tick with t >= DETERMINISTIC_FAILURE_TIME_T0.
+#   - It stays failed for the rest of the run when DETERMINISTIC_FAILURE_OFF_TIME < 0
+#     (permanent crash -> cleanest single SAIDA event); otherwise it recovers after
+#     that many seconds (a single SAIDA+ENTRADA pair).
+#
+# Node-id note: main.py adds the target (id 0) and adversary (id 1) first, so the
+# agents occupy ids 2 .. NUM_AGENTS+1. The victim id must be in that agent range.
+DETERMINISTIC_FAILURE_ENABLE: bool = (
+    _os.environ.get("DETERMINISTIC_FAILURE_ENABLE", "True").strip().lower()
+    in ("true", "1", "yes", "y")
+)
+# Aceita LISTA separada por virgula (Fase 3 churn: falhar k vitimas de uma vez, cenarios A/B).
+# DETERMINISTIC_FAILURE_AGENT_ID mantem o primeiro id (back-compat); _IDS e' o conjunto completo.
+_raw_det_ids = _os.environ.get("DETERMINISTIC_FAILURE_AGENT_ID", "6")
+_det_ids = []
+for _tok in _raw_det_ids.split(","):
+    _tok = _tok.strip()
+    if _tok:
+        try:
+            _det_ids.append(int(_tok))
+        except ValueError:
+            pass
+DETERMINISTIC_FAILURE_AGENT_IDS = frozenset(_det_ids)
+DETERMINISTIC_FAILURE_AGENT_ID: int = _det_ids[0] if _det_ids else -1
+try:
+    DETERMINISTIC_FAILURE_TIME_T0: float = float(
+        _os.environ.get("DETERMINISTIC_FAILURE_TIME_T0", "15.0")
+    )
+except ValueError:
+    DETERMINISTIC_FAILURE_TIME_T0 = -1.0
+try:
+    DETERMINISTIC_FAILURE_OFF_TIME: float = float(
+        _os.environ.get("DETERMINISTIC_FAILURE_OFF_TIME", "-1.0")
+    )
+except ValueError:
+    DETERMINISTIC_FAILURE_OFF_TIME = -1.0
 
 # --------------------------------------------------------------------------------------
 # 6) Failure detection and liveness (timeouts, neighbor selection)
@@ -121,9 +225,30 @@ FAILURE_OFF_TIME: float = 8.0         # seconds
 # Protocol liveness / neighbor selection tuning
 # Note: these values are local (not transmitted) and are expressed in seconds/radians.
 # Timeout guards are scaled with CONTROL_PERIOD.
-AGENT_STATE_TIMEOUT: float = 5.0 * CONTROL_PERIOD    # AgentState liveness timeout (s)
+# AgentState liveness timeout (s). Default 5*dt; env-overridable (Fase 3). Um detector de falhas
+# sob perda de pacote precisa de timeout >> (perdas consecutivas)*broadcast_period, senao vizinhos
+# vivos "piscam" mortos (tempestade de falsos SAIDA/ENTRADA). Escalar com a taxa de perda.
+try:
+    AGENT_STATE_TIMEOUT: float = float(_os.environ["AGENT_STATE_TIMEOUT"])
+except (KeyError, ValueError):
+    AGENT_STATE_TIMEOUT = 5.0 * CONTROL_PERIOD       # AgentState liveness timeout (s)
 TARGET_STATE_TIMEOUT: float = 10.0 * CONTROL_PERIOD  # TargetState liveness timeout (s)
 HYSTERESIS_RAD: float = 0.05                         # Neighbor switching hysteresis (rad)
+
+# HYSTERESIS_FRAC: when > 0, the neighbour-switching hysteresis is DIMENSIONLESS -- a fraction
+# of the ideal gap (2*pi/N_alive) instead of the fixed absolute HYSTERESIS_RAD. The fixed value
+# has HYSTERESIS_RAD/(2*pi/N) growing with N; it exceeds the gap at N ~ 2*pi/HYSTERESIS_RAD
+# (~126 for 0.05), which would break neighbour switching at very large N (only in scenarios with
+# neighbour REORDERING -- churn / passing / moving target; the order-preserving single-failure
+# case is unaffected). The fraction keeps the hysteresis-to-gap ratio constant for any N
+# (PATH-B dimensionless gain). 0.0 = legacy absolute HYSTERESIS_RAD. To match the legacy ~8%
+# of the gap at the default N=10, use ~0.08. Env-overridable for sweeps.
+try:
+    HYSTERESIS_FRAC: float = float(_os.environ.get("HYSTERESIS_FRAC", "0.0"))
+except ValueError:
+    HYSTERESIS_FRAC = 0.0
+if HYSTERESIS_FRAC < 0.0:
+    HYSTERESIS_FRAC = 0.0
 
 # Optional housekeeping: prune expired cached states to avoid unbounded growth.
 PRUNE_EXPIRED_STATES: bool = True
@@ -133,7 +258,10 @@ PRUNE_EXPIRED_STATES: bool = True
 # --------------------------------------------------------------------------------------
 
 # Swarm/encirclement defaults
-NUM_AGENTS: int = 10                # Number of agent nodes
+try:
+    NUM_AGENTS: int = int(_os.environ.get("NUM_AGENTS", "10"))   # env-overridable for N-sweeps
+except ValueError:
+    NUM_AGENTS = 10                 # Number of agent nodes
 ENCIRCLEMENT_RADIUS: float = 20.0   # Desired encirclement radius in meters
 
 # Initial agent placement controls (consumed by main.py when spawning agent nodes).
@@ -147,8 +275,14 @@ ENCIRCLEMENT_RADIUS: float = 20.0   # Desired encirclement radius in meters
 # INIT_ANGLES_EQUIDISTANT: if False, initial angles are drawn uniformly in
 # [0, 2*pi). If True, agents are placed at equidistant angles 2*pi/NUM_AGENTS apart
 # starting from 0 rad.
-INIT_RADIUS_RANGE: float = 0.0
-INIT_ANGLES_EQUIDISTANT: bool = True
+try:
+    INIT_RADIUS_RANGE: float = float(_os.environ.get("INIT_RADIUS_RANGE", "0.0"))
+except ValueError:
+    INIT_RADIUS_RANGE = 0.0
+INIT_ANGLES_EQUIDISTANT: bool = (
+    _os.environ.get("INIT_ANGLES_EQUIDISTANT", "True").strip().lower()
+    in ("true", "1", "yes", "y")
+)
 
 # Desired angular velocity for the whole swarm to spin around the target (rad/s).
 # This value is broadcast by the target inside TargetState.
@@ -223,7 +357,10 @@ K_TAU: float = 0.2          # tangential control gain (velocity scaling)
 BETA_U: float = 7.0         # legacy single-channel damping (kept for reference)
 BETA_U_LOCAL: float = 7.0   # damping for the local error channel
 BETA_U_PROP: float = 7.0    # damping for the propagated error channel
-K_E_TAU: float = 25.0       # spacing error injection gain (e_tau multiplier)
+try:
+    K_E_TAU: float = float(_os.environ.get("K_E_TAU", "25.0"))   # env-overridable (gain-normalization study)
+except ValueError:
+    K_E_TAU = 25.0          # spacing error injection gain (e_tau multiplier)
 U_CONFLICT_BLEND_WIDTH: float = 0.2  # 0.0 restores the previous hard winner-takes-all conflict composition
 
 # Composition policy for u_local + u_prop in TangentialSpacingController._compose:
@@ -281,6 +418,200 @@ MIN_EVENT_DELTA_FRAC: float = 0.4
 # the pred/succ identity can flip a few times spuriously. Suppressing pulses
 # during the warmup avoids flooding the channel with phantom events at startup.
 FAST_CHANNEL_WARMUP_SEC: float = 1.0
+
+
+# --------------------------------------------------------------------------------------
+# 9c) Dual Pulse propagation method (soliton-inspired, gap-modification integration)
+# --------------------------------------------------------------------------------------
+#
+# Discrete bidirectional pulses with hop counts. Each ring node discovers N and its
+# own angular shift target locally — no global topology knowledge required.
+#
+# Integration path: unlike the e_tau-driven layers, DualPulseLayer modifies the
+# pred_gap/succ_gap inputs to compute_e_tau_used (Option A). It does NOT feed
+# u_prop via get_neighbor_signal().
+
+# DUAL_PULSE_TTL_HOPS: pulse discarded after this many forwards. Safety BACKSTOP only
+# (the refractory_cache already self-terminates a pulse after ~one ring). MUST be >= ~N:
+# a receiver needs the long-way pulse up to ~N-1 hops and the originator needs ~N hops for
+# its return, so TTL < N TRUNCATES the redistribution (coverage collapses). A large value
+# does NOT hurt small N (the cache stops the pulse first). Env-overridable; default kept at
+# 50 for back-compat but it must be raised (>= N, e.g. ~3N or a fixed 500) for N > ~50.
+try:
+    DUAL_PULSE_TTL_HOPS: int = int(_os.environ.get("DUAL_PULSE_TTL_HOPS", "50"))
+except ValueError:
+    DUAL_PULSE_TTL_HOPS = 50
+
+# DUAL_PULSE_GAP_CLIP_FRAC: shift_remaining is clipped so that virtual gaps stay
+# positive with margin. Value is fraction of the smaller real gap.
+DUAL_PULSE_GAP_CLIP_FRAC: float = 0.8
+
+# DUAL_PULSE_MIN_RING_SIZE: minimum N_new for the redistribution math to be
+# meaningful. Below this, the layer skips the delta_D computation.
+DUAL_PULSE_MIN_RING_SIZE: int = 3
+
+# DUAL_PULSE_DELTA_SCALE: multiplicative factor applied to delta_D (receivers)
+# and delta_orig (originator). Range: (0, 1]. With scale = 1.0 the algorithm
+# applies the full analytical redistribution shift in one step, which gives
+# the strongest "head start" to distant agents but overshoots the controller
+# at the immediate neighbors of the dead drone (M3/M5 worse). Lower values
+# attenuate the shift uniformly: the direction is preserved, only the
+# magnitude is reduced. Tunable via env var DUAL_PULSE_DELTA_SCALE for sweeps.
+try:
+    DUAL_PULSE_DELTA_SCALE: float = float(_os.environ.get("DUAL_PULSE_DELTA_SCALE", "0.5"))
+except ValueError:
+    DUAL_PULSE_DELTA_SCALE = 0.5
+if not (0.0 < DUAL_PULSE_DELTA_SCALE <= 1.0):
+    DUAL_PULSE_DELTA_SCALE = 0.5
+
+# DUAL_PULSE_RAMP_TICKS: number of control ticks over which a freshly
+# computed delta_D is ramped into the applied shift, instead of being
+# applied instantaneously. Range: positive integer (1 = no ramp, recovers
+# the v1 step behaviour). Default 4 ticks (~40ms at CONTROL_PERIOD=0.01)
+# attenuates the controller transient that the instantaneous step caused
+# (M3 jitter, M5 effort) without unduly slowing the redistribution. The
+# RAMP_TICKS sweep on dense Phase 3 confirmed K=4 matches K=6/K=8 byte-
+# for-byte on M1/M3/M5/M7 while leaving the smallest residual shift at
+# sim end and giving the fastest response to events. K>=12 starts losing
+# M7_settle_median because the ramp becomes slow enough for e_tau_real
+# to cross the settling threshold mid-ramp.
+# Tunable via env var DUAL_PULSE_RAMP_TICKS for sweeps.
+try:
+    DUAL_PULSE_RAMP_TICKS: int = int(_os.environ.get("DUAL_PULSE_RAMP_TICKS", "4"))
+except ValueError:
+    DUAL_PULSE_RAMP_TICKS = 4
+if DUAL_PULSE_RAMP_TICKS < 1:
+    DUAL_PULSE_RAMP_TICKS = 1
+
+# DUAL_PULSE_BROADCAST_REPEATS: how many consecutive ticks each outgoing pulse is
+# re-broadcast (redundancy against intra-tick firing order / packet loss). Default 2.
+# env-overridable (Fase 3 - robustez: trade-off banda x robustez sob perda de pacote).
+try:
+    DUAL_PULSE_BROADCAST_REPEATS: int = int(_os.environ.get("DUAL_PULSE_BROADCAST_REPEATS", "2"))
+except ValueError:
+    DUAL_PULSE_BROADCAST_REPEATS = 2
+if DUAL_PULSE_BROADCAST_REPEATS < 1:
+    DUAL_PULSE_BROADCAST_REPEATS = 1
+
+# DUAL_PULSE_N_CLIP: rejeita eventos cujo tamanho de anel inferido (hop-count) e' IMPOSSIVEL
+# (< MIN_RING ou > NUM_AGENTS) -> nao aplica delta_D corrompido. Mitiga corrupcao de N sob churn
+# (topologia muda durante o voo do pulso). Default False (env A/B). Fase 3 Track B.
+DUAL_PULSE_N_CLIP: bool = (
+    _os.environ.get("DUAL_PULSE_N_CLIP", "False").strip().lower() in ("true", "1", "yes", "y")
+)
+
+# DUAL_PULSE_GATE_*: "gating" do overlay sob churn denso (Fase 3 Track B). Quando eventos de
+# topologia ficam frequentes (> GATE_MAX_EVENTS em GATE_WINDOW s) o agente SUPRIME injecao e
+# DECAI o shift -> degrada para o baseline (rede de seguranca) em vez de atrapalhar. Default off.
+DUAL_PULSE_GATE_ENABLE: bool = (
+    _os.environ.get("DUAL_PULSE_GATE_ENABLE", "False").strip().lower() in ("true", "1", "yes", "y")
+)
+try:
+    DUAL_PULSE_GATE_WINDOW: float = float(_os.environ.get("DUAL_PULSE_GATE_WINDOW", "5.0"))
+except ValueError:
+    DUAL_PULSE_GATE_WINDOW = 5.0
+try:
+    DUAL_PULSE_GATE_MAX_EVENTS: int = int(_os.environ.get("DUAL_PULSE_GATE_MAX_EVENTS", "1"))
+except ValueError:
+    DUAL_PULSE_GATE_MAX_EVENTS = 1
+
+# DUAL_PULSE_ALPHA_CLOSE_RATIO: hop-distance attenuation of delta_D.
+# Receivers close to the dead/recovered drone D already feel a strong
+# physical perturbation from the gap discontinuity at the event moment.
+# Adding the full algorithmic delta_D on top of that physical jolt amplifies
+# M3 jitter without proportional M7 settling benefit (verified empirically).
+# This ratio attenuates delta_D for those nearby receivers while keeping it
+# near 1.0 (= no attenuation) for receivers near the anchor / antipode of D.
+#
+# Linear interpolation:  alpha(h) = ALPHA_CLOSE_RATIO + (1 - ALPHA_CLOSE_RATIO) * d_norm
+# where d_norm = (hop distance from D in the affected ring) / (N_new / 2),
+# clipped to [0, 1].
+#
+# Setting ALPHA_CLOSE_RATIO = 1.0 disables the hop attenuation (recovers the
+# uniform DUAL_PULSE_DELTA_SCALE behavior). Lower values attenuate immediate
+# neighbors more aggressively; the per-hop factor is multiplied on top of
+# DUAL_PULSE_DELTA_SCALE.
+try:
+    DUAL_PULSE_ALPHA_CLOSE_RATIO: float = float(
+        _os.environ.get("DUAL_PULSE_ALPHA_CLOSE_RATIO", "0.7")
+    )
+except ValueError:
+    DUAL_PULSE_ALPHA_CLOSE_RATIO = 0.7
+if not (0.0 <= DUAL_PULSE_ALPHA_CLOSE_RATIO <= 1.0):
+    DUAL_PULSE_ALPHA_CLOSE_RATIO = 0.7
+
+# DUAL_PULSE_ALPHA_CURVE_POWER: exponent shaping how alpha(d_norm) interpolates
+# between ALPHA_CLOSE_RATIO (at d=0, immediate neighbor of D) and 1.0 (at the
+# anchor / antipode of D in the affected ring).
+#
+# Formula:  alpha(d_norm) = ALPHA_CLOSE_RATIO + (1 - ALPHA_CLOSE_RATIO) * d_norm^p
+#
+# p = 1.0  → linear (default v1 behaviour)
+# p > 1.0  → convex from below: attenuation stays near ALPHA_CLOSE_RATIO for
+#            small d, snaps toward 1.0 only near the anchor. Concentrates the
+#            attenuation budget on receivers close to D (where M3 jitter is
+#            empirically worst), preserving full delta for mid/distant nodes.
+# p < 1.0  → concave: attenuation drops off fast away from D. Almost no
+#            attenuation past the immediate neighbour. Rarely useful.
+#
+# Tunable via env var DUAL_PULSE_ALPHA_CURVE_POWER for sweeps.
+try:
+    DUAL_PULSE_ALPHA_CURVE_POWER: float = float(
+        _os.environ.get("DUAL_PULSE_ALPHA_CURVE_POWER", "1.0")
+    )
+except ValueError:
+    DUAL_PULSE_ALPHA_CURVE_POWER = 1.0
+if DUAL_PULSE_ALPHA_CURVE_POWER <= 0.0:
+    DUAL_PULSE_ALPHA_CURVE_POWER = 1.0
+
+# DUAL_PULSE_SLEEP_THRESHOLD: when the magnitude of the shift to be applied to
+# the gaps is below this threshold (radians), the gap-bias step is skipped
+# entirely — the controller sees the real gaps. This prevents subtle
+# interference between dual_pulse and tracking dynamics during the "no
+# in-flight events" regime, which empirically caused a small M1 degradation
+# (~+7-12%) when the target is moving.
+#
+# Why a threshold (vs always-on bias):
+#   - Above threshold: shift carries meaningful redistribution information,
+#     bias yields the M7 settling-time gain we want.
+#   - Below threshold: shift is a tiny residual; the local controller
+#     suffices, and skipping bias avoids the small but persistent jitter
+#     that the controller picks up tracking a near-zero virtual offset.
+#
+# 0.01 rad ≈ 0.57° ≈ 0.2 m arc at r=20m. Default chosen well below typical
+# delta_D magnitudes (~0.1-0.3 rad) so all real events still trigger bias.
+# Set to 0.0 to disable the sleep gate (recovers v1.6 behaviour).
+try:
+    DUAL_PULSE_SLEEP_THRESHOLD: float = float(
+        _os.environ.get("DUAL_PULSE_SLEEP_THRESHOLD", "0.01")
+    )
+except ValueError:
+    DUAL_PULSE_SLEEP_THRESHOLD = 0.01
+if DUAL_PULSE_SLEEP_THRESHOLD < 0.0:
+    DUAL_PULSE_SLEEP_THRESHOLD = 0.0
+
+# DUAL_PULSE_INTEGRATION: how the computed redistribution shift enters the control loop.
+#   "A"   : Option A (legacy) — bias the gaps by the agent's OWN shift; the spacing
+#           controller's reflex drives the motion (execution GATED by the controller gain).
+#   "B"   : Option B (feedforward, 2-DOF) — DIRECT feedforward velocity (gain-INDEPENDENT)
+#           executes the redistribution; the feedback sees a MINIMAL cancelling bias from the
+#           neighbours' shifts (succ+s_succ, pred-s_pred) -> feedback ~2*s_self (mild double-drive).
+#   "B2"  : like B but the FULL cancelling bias (succ+(s_succ-s_self), pred-(s_pred-s_self)) ->
+#           feedback ~0 on-plan (NO double-drive) so the feedforward is the SOLE driver.
+#   "OFF" : dual_pulse layer runs (pulses circulate) but does NOT touch control (pure baseline).
+DUAL_PULSE_INTEGRATION: str = _os.environ.get("DUAL_PULSE_INTEGRATION", "A").strip().upper()
+if DUAL_PULSE_INTEGRATION not in ("A", "B", "B2", "OFF"):
+    DUAL_PULSE_INTEGRATION = "A"
+
+# DUAL_PULSE_T_FF: feedforward time constant (s) for Option B. The agent consumes its
+# remaining shift at rate shift/T_FF, so the redistribution executes with a ~T_FF time
+# constant INDEPENDENT of the controller gain. Lower-bounded by actuation (T_FF >~ VM_TAU_XY).
+try:
+    DUAL_PULSE_T_FF: float = float(_os.environ.get("DUAL_PULSE_T_FF", "1.0"))
+except ValueError:
+    DUAL_PULSE_T_FF = 1.0
+if DUAL_PULSE_T_FF < 0.0:
+    DUAL_PULSE_T_FF = 1.0
 
 
 # --------------------------------------------------------------------------------------

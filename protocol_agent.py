@@ -22,6 +22,7 @@ except Exception:  # pragma: no cover
 import json
 
 from propagation_layer import create_propagation_layer, DampedAdvectionLayer
+from dual_pulse_layer import DualPulseLayer, apply_shift_to_gaps
 
 from config_param import (
     CONTROL_LOOP_TIMER_STR,
@@ -30,6 +31,7 @@ from config_param import (
     AGENT_STATE_TIMEOUT,
     TARGET_STATE_TIMEOUT,
     HYSTERESIS_RAD,
+    HYSTERESIS_FRAC,
     PRUNE_EXPIRED_STATES,
     ENCIRCLEMENT_RADIUS,
     R_MIN,
@@ -56,11 +58,21 @@ from config_param import (
     K_TRIGGER,
     MIN_EVENT_DELTA_FRAC,
     FAST_CHANNEL_WARMUP_SEC,
+    DETERMINISTIC_FAILURE_ENABLE,
+    DETERMINISTIC_FAILURE_AGENT_ID,
+    DETERMINISTIC_FAILURE_AGENT_IDS,
+    DETERMINISTIC_FAILURE_TIME_T0,
+    DETERMINISTIC_FAILURE_OFF_TIME,
+    DUAL_PULSE_INTEGRATION,
+    DUAL_PULSE_T_FF,
+    DUAL_PULSE_GATE_ENABLE,
+    DUAL_PULSE_GATE_WINDOW,
+    DUAL_PULSE_GATE_MAX_EVENTS,
     )
 
 
 from protocol_messages import AgentState, TargetState
-from controllers import RadialDistanceController, TangentialSpacingController
+from controllers import RadialDistanceController, TangentialSpacingController, wrap_to_pi
 
 
 class AgentProtocol(IProtocol):
@@ -73,9 +85,17 @@ class AgentProtocol(IProtocol):
     def initialize(self):
         self.node_id = self.provider.get_id()  # Get the node ID from the provider
 
-        # Failure RNG: reproducible per-agent if enabled, else non-deterministic
+        # Failure RNG: reproducible per-agent if enabled, else non-deterministic.
+        # EXPERIMENT_SEED is mixed in so Monte Carlo sweeps see different
+        # failure timelines for each master seed.
         if EXPERIMENT_REPRODUCIBLE:
-            self._failure_rng = random.Random(0xF00DCAFE + int(self.node_id))
+            try:
+                _master_seed = int(os.environ.get("EXPERIMENT_SEED", "0"))
+            except ValueError:
+                _master_seed = 0
+            self._failure_rng = random.Random(
+                0xF00DCAFE + int(self.node_id) + _master_seed * 10000
+            )
         else:
             self._failure_rng = random.Random()
 
@@ -85,6 +105,10 @@ class AgentProtocol(IProtocol):
 
         # Failure injection state
         self._failed: bool = False
+        # Deterministic single-failure mode: latch so the designated victim
+        # crashes at most once (prevents a crash/recover/crash loop when
+        # DETERMINISTIC_FAILURE_OFF_TIME >= 0).
+        self._det_failure_fired: bool = False
 
         # Access the VelocityMobilityHandler if available
         handlers = getattr(self.provider, "handlers", {}) or {}
@@ -106,6 +130,14 @@ class AgentProtocol(IProtocol):
         self.neighbor_succ_state: Optional[AgentState] = None
         self._neighbor_pred_gap: Optional[float] = None
         self._neighbor_succ_gap: Optional[float] = None
+        self._latest_theta_i: Optional[float] = None
+        # Alive-neighbor count from the latest _refresh_neighbors call,
+        # plus the value seen on the previous tick. Used by the dual_pulse
+        # trigger to distinguish SAIDA (alive_count decreased) from ENTRADA
+        # (alive_count increased) — only SAIDA fires inject_pulse in v1.
+        self._latest_alive_count: int = 0
+        self._recent_topo_events: list = []   # timestamps de eventos de topologia (gate de churn)
+        self._last_alive_count: int = 0
 
         # Local lambda (lp) weights for predecessor/successor spacing.
         # Defaults to uniform spacing.
@@ -158,6 +190,32 @@ class AgentProtocol(IProtocol):
         self.prop_layer = create_propagation_layer(_prop_method, _prop_params)
         self._prop_k_prop: float = _prop_k_prop
         self.last_prop_signal: float = 0.0
+
+        # Dual-pulse layer alias: same object as prop_layer when the user
+        # picked "dual_pulse" at the menu. Other methods leave this as None
+        # so the gap-modification path stays dormant.
+        self.dual_pulse_layer: Optional[DualPulseLayer] = (
+            self.prop_layer if isinstance(self.prop_layer, DualPulseLayer) else None
+        )
+        # Tell the dual_pulse layer this node's id so it can detect ENTRADA
+        # passthrough mode (the recovered drone forwards but skips self-shift).
+        if self.dual_pulse_layer is not None:
+            self.dual_pulse_layer.set_owner_id(int(self.node_id))
+        # Previous target-relative angle, used to compute realized angular
+        # displacement between control ticks and feed it to consume_motion().
+        # Initialized lazily on the first tick when theta_i is available.
+        self._last_theta_i_for_dual_pulse: Optional[float] = None
+        # Latest dual-pulse shift values, mirrored here for telemetry.
+        # last_dual_pulse_shift   = applied shift (post-ramp); same as
+        #                           layer.get_shift_remaining(); fed to
+        #                           apply_shift_to_gaps.
+        # last_dual_pulse_target  = ideal accumulated shift (pre-ramp);
+        #                           layer.get_shift_target(); useful to
+        #                           diagnose residual at end-of-run.
+        self.last_dual_pulse_shift: float = 0.0
+        self.last_dual_pulse_target: float = 0.0
+        # Latest physical (unshifted) e_tau, mirrored here for telemetry.
+        self.last_e_tau_real: float = 0.0
 
         # Fast soliton-like channel — runs in PARALLEL with the main prop_layer.
         # Phase A: observational only (does NOT enter u_total). Pulses are
@@ -217,6 +275,50 @@ class AgentProtocol(IProtocol):
             FAILURE_RECOVER_TIMER_STR,
             self.provider.current_time() + float(off_time),
         )
+
+    def _inject_failure_now(self, off_time):
+        """Put this agent into the failed (OFF) state.
+
+        Shared by the random Poisson path and the deterministic single-failure
+        mode so both produce identical side effects. ``off_time``:
+          - positive float -> recover after that many seconds,
+          - 0 / non-finite -> recover effectively immediately (off_time clamped to 0),
+          - None           -> permanent crash (no recovery timer scheduled).
+        """
+        self._failed = True
+
+        # Log failure_start event for the heatmap overlay.
+        self._event_rows.append({
+            "timestamp": float(self.provider.current_time()),
+            "node_id": int(self.node_id),
+            "event_type": "failure_start",
+            "amplitude": 0.0,
+        })
+
+        if self._vis is not None:
+            try:
+                self._vis.paint_node(self.node_id, (255.0, 0.0, 0.0))
+            except Exception:
+                pass
+
+        self.provider.cancel_timer(CONTROL_LOOP_TIMER_STR)
+
+        if self.velocity_handler is not None:
+            try:
+                self.velocity_handler.set_velocity(self.node_id, (0.0, 0.0, 0.0))
+            except Exception:
+                pass
+
+        if off_time is not None:
+            ot = float(off_time)
+            if not (math.isfinite(ot) and ot > 0.0):
+                ot = 0.0
+            self.schedule_failure_recover_timer(ot)
+        # off_time is None => permanent crash, no recovery scheduled.
+
+        if SIM_DEBUG:
+            _desc = "permanent" if off_time is None else f"{float(off_time):.2f}s"
+            print(f"Agent {self.node_id} ENTERED FAILURE ({_desc})")
 
     @staticmethod
     def _dot2(a, b) -> float:
@@ -487,6 +589,10 @@ class AgentProtocol(IProtocol):
             self.prop_layer.on_neighbor_change()
         self._neighbor_pred_gap = pred_gap
         self._neighbor_succ_gap = succ_gap
+        # Cache the latest target-relative angle for the dual-pulse motion tracker.
+        self._latest_theta_i = theta_i
+        # Cache the latest alive-neighbor count for the SAIDA-only trigger gate.
+        self._latest_alive_count = int(alive_count)
 
         self._update_neighbor_lps_from_target()
 
@@ -617,6 +723,16 @@ class AgentProtocol(IProtocol):
         def _expired_or_missing(agent_id: Optional[int]) -> bool:
             return agent_id is None or not self._agent_is_alive(agent_id, now)
 
+        # Neighbour-switching hysteresis. DIMENSIONLESS (a fraction of the ideal gap
+        # 2*pi/N_alive) when HYSTERESIS_FRAC > 0, so the hysteresis-to-gap ratio stays
+        # constant for any N; otherwise the legacy fixed absolute HYSTERESIS_RAD.
+        _n_alive = len(ring)
+        _hyst = (
+            HYSTERESIS_FRAC * (2.0 * math.pi / _n_alive)
+            if (HYSTERESIS_FRAC > 0.0 and _n_alive > 0)
+            else HYSTERESIS_RAD
+        )
+
         if (
             not crossed_swap
             and not _expired_or_missing(self.neighbor_pred_id)
@@ -627,7 +743,7 @@ class AgentProtocol(IProtocol):
                 if old_theta is not None:
                     old_gap = self.wrap_to_2pi(theta_i - old_theta)
                     improvement = old_gap - pred_gap
-                    if improvement <= HYSTERESIS_RAD:
+                    if improvement <= _hyst:
                         pred_id = int(self.neighbor_pred_id)
                         pred_gap = old_gap
 
@@ -641,7 +757,7 @@ class AgentProtocol(IProtocol):
                 if old_theta is not None:
                     old_gap = self.wrap_to_2pi(old_theta - theta_i)
                     improvement = old_gap - succ_gap
-                    if improvement <= HYSTERESIS_RAD:
+                    if improvement <= _hyst:
                         succ_id = int(self.neighbor_succ_id)
                         succ_gap = old_gap
 
@@ -650,6 +766,45 @@ class AgentProtocol(IProtocol):
     def handle_timer(self, timer: str):
         if timer == FAILURE_CHECK_TIMER_STR:
             if self._failed:
+                return
+
+            # Deterministic single-failure mode (controlled-event experiments):
+            # bypass the Poisson stream entirely so post-event stabilization can
+            # be measured cleanly. Exactly ONE designated agent crashes once at a
+            # fixed sim time; every other agent never fails. OFF_TIME < 0 means a
+            # permanent crash (no recovery). See config_param section 5b.
+            if DETERMINISTIC_FAILURE_ENABLE:
+                now_t = float(self.provider.current_time())
+                if (
+                    not self._det_failure_fired
+                    and DETERMINISTIC_FAILURE_AGENT_IDS
+                    and DETERMINISTIC_FAILURE_TIME_T0 >= 0.0
+                    and int(self.node_id) in DETERMINISTIC_FAILURE_AGENT_IDS
+                    and now_t >= float(DETERMINISTIC_FAILURE_TIME_T0)
+                ):
+                    self._det_failure_fired = True
+                    _off = (
+                        None
+                        if DETERMINISTIC_FAILURE_OFF_TIME < 0.0
+                        else float(DETERMINISTIC_FAILURE_OFF_TIME)
+                    )
+                    self._inject_failure_now(_off)
+                    return
+                # Not the victim (or t0 not reached): keep polling, never Poisson-fail.
+                self.schedule_failure_check_timer()
+                return
+
+            # Suppress failure injection during the initial warmup window.
+            # Agents are still discovering each other (target broadcasts may
+            # not have reached every node yet, neighbor identities flap), and
+            # a failure during this window leaves observable transients that
+            # look like a "non-equidistant start" — but no dual_pulse or
+            # fast_layer event is fired (both are gated by the same warmup),
+            # so the system has no way to recover gracefully. Reschedule and
+            # let the simulation reach its initial equilibrium first.
+            now_t = float(self.provider.current_time())
+            if now_t < float(FAST_CHANNEL_WARMUP_SEC):
+                self.schedule_failure_check_timer()
                 return
 
             dt = float(FAILURE_CHECK_PERIOD)
@@ -673,37 +828,7 @@ class AgentProtocol(IProtocol):
             rng = getattr(self, "_failure_rng", None)
             draw = rng.random() if rng is not None else random.random()
             if p > 0.0 and draw < p:
-                self._failed = True
-
-                # Log failure_start event for the heatmap overlay.
-                self._event_rows.append({
-                    "timestamp": float(self.provider.current_time()),
-                    "node_id": int(self.node_id),
-                    "event_type": "failure_start",
-                    "amplitude": 0.0,
-                })
-
-                if self._vis is not None:
-                    try:
-                        self._vis.paint_node(self.node_id, (255.0, 0.0, 0.0))
-                    except Exception:
-                        pass
-
-                self.provider.cancel_timer(CONTROL_LOOP_TIMER_STR)
-
-                if self.velocity_handler is not None:
-                    try:
-                        self.velocity_handler.set_velocity(self.node_id, (0.0, 0.0, 0.0))
-                    except Exception:
-                        pass
-
-                off_time = float(FAILURE_OFF_TIME)
-                if not (math.isfinite(off_time) and off_time > 0.0):
-                    off_time = 0.0
-                self.schedule_failure_recover_timer(off_time)
-
-                if SIM_DEBUG:
-                    print(f"Agent {self.node_id} ENTERED FAILURE for {off_time:.2f}s")
+                self._inject_failure_now(float(FAILURE_OFF_TIME))
                 return
 
             self.schedule_failure_check_timer()
@@ -721,6 +846,17 @@ class AgentProtocol(IProtocol):
             self._last_pred_id_for_event = None
             self._last_succ_id_for_event = None
             self._last_e_tau_for_event = 0.0
+            # Dual-pulse motion tracker is no longer meaningful (the agent
+            # stayed put while others moved). prop_layer.on_reset() above has
+            # already cleared shift_remaining when this is the dual_pulse layer.
+            self._last_theta_i_for_dual_pulse = None
+            self.last_dual_pulse_shift = 0.0
+            self.last_dual_pulse_target = 0.0
+            self.last_e_tau_real = 0.0
+            # Force the SAIDA gate to "first observation" mode on recovery
+            # (alive_decreased requires _last_alive_count > 0; setting it to 0
+            # makes the next tick safe regardless of what alive_count is then).
+            self._last_alive_count = 0
 
             # Log failure_end event for the heatmap overlay.
             self._event_rows.append({
@@ -813,9 +949,84 @@ class AgentProtocol(IProtocol):
                 else:
                     r_eff = r_min
 
+                # --- Dual-pulse Option A: realize motion + apply virtual shift ---
+                # When the dual_pulse layer is the active prop_layer, the agent
+                # discovers its angular shift target locally via counter-
+                # propagating pulses. The shift is applied by biasing the
+                # gap measurements that the controller sees, NOT through
+                # u_prop. shift_remaining is consumed as the agent rotates.
+                pred_gap_used = pred_gap
+                succ_gap_used = succ_gap
+                dp_ff_shift = 0.0  # Option B: own shift to feed-forward (consumed over T_FF)
+                if (
+                    self.dual_pulse_layer is not None
+                    and self.dual_pulse_layer.is_active()
+                    and DUAL_PULSE_INTEGRATION in ("A", "B", "B2")
+                ):
+                    theta_i_now = self._latest_theta_i
+                    if (
+                        theta_i_now is not None
+                        and self._last_theta_i_for_dual_pulse is not None
+                    ):
+                        try:
+                            d_theta = wrap_to_pi(
+                                float(theta_i_now) - float(self._last_theta_i_for_dual_pulse)
+                            )
+                        except Exception:
+                            d_theta = 0.0
+                        self.dual_pulse_layer.consume_motion(d_theta)
+                    if theta_i_now is not None:
+                        self._last_theta_i_for_dual_pulse = float(theta_i_now)
+
+                    s_self = float(self.dual_pulse_layer.get_shift_remaining())
+                    if DUAL_PULSE_INTEGRATION == "A":
+                        # Option A: bias the gaps by the OWN shift; the controller's
+                        # reflex drives the motion (execution gated by the gain).
+                        pred_gap_used, succ_gap_used = apply_shift_to_gaps(
+                            pred_gap, succ_gap, s_self
+                        )
+                    else:
+                        # Option B (2-DOF): the feedback sees a CANCELLING bias built from
+                        # the NEIGHBOURS' shifts, so succ_used - pred_used -> 2*s_self (own
+                        # shift only) -> 0 when on its own slot, even if neighbours lag.
+                        # The redistribution motion comes from the direct feedforward below.
+                        s_pred = (
+                            float(getattr(self.neighbor_pred_state, "dp_shift", 0.0))
+                            if self.neighbor_pred_state is not None else 0.0
+                        )
+                        s_succ = (
+                            float(getattr(self.neighbor_succ_state, "dp_shift", 0.0))
+                            if self.neighbor_succ_state is not None else 0.0
+                        )
+                        if not math.isfinite(s_pred):
+                            s_pred = 0.0
+                        if not math.isfinite(s_succ):
+                            s_succ = 0.0
+                        if pred_gap is not None and succ_gap is not None:
+                            if DUAL_PULSE_INTEGRATION == "B2":
+                                # FULL cancel: feedback sees ~0 on-plan (NO double-drive),
+                                # so the direct feedforward is the SOLE driver.
+                                succ_gap_used = max(1e-3, float(succ_gap) + (s_succ - s_self))
+                                pred_gap_used = max(1e-3, float(pred_gap) - (s_pred - s_self))
+                            else:
+                                # "B" minimal cancel: feedback sees ~2*s_self (mild double-drive).
+                                succ_gap_used = max(1e-3, float(succ_gap) + s_succ)
+                                pred_gap_used = max(1e-3, float(pred_gap) - s_pred)
+                        dp_ff_shift = s_self
+
+                # Physical (unshifted) e_tau — for telemetry analysis only.
+                e_tau_real_val = self.compute_spacing_error(
+                    pred_gap, succ_gap, self.lp_pred, self.lp_succ
+                )
+                self.last_e_tau_real = (
+                    float(e_tau_real_val) if math.isfinite(e_tau_real_val) else 0.0
+                )
+
+                # Controller input uses the virtual gaps (identical to real
+                # gaps when dual_pulse is inactive).
                 e_tau, e_tau_eff, e_tau_used = self.compute_e_tau_used(
-                    pred_gap=pred_gap,
-                    succ_gap=succ_gap,
+                    pred_gap=pred_gap_used,
+                    succ_gap=succ_gap_used,
                     t_hat=t_hat,
                     r_eff=r_eff,
                 )
@@ -881,10 +1092,88 @@ class AgentProtocol(IProtocol):
                             "amplitude": float(amplitude),
                         })
 
+                # Dual-pulse SAIDA injection: only the dead drone's predecessor
+                # injects (i.e. the side that detected succ_changed). The
+                # successor side detects pred_changed but stays silent here,
+                # since the canonical originator's geometry must match the
+                # delta_D / delta_orig formulas. Independent of the fast_layer
+                # threshold: a missing successor is the event itself.
+                #
+                # SAIDA / ENTRADA gate via alive-neighbor count delta:
+                #   alive_decreased → drone left  → SAIDA event
+                #   alive_increased → drone returned → ENTRADA event
+                # Both share the same trigger surface (succ_changed pos-warmup),
+                # only the formula and pulse payload differ.
+                alive_decreased = (
+                    self._last_alive_count > 0
+                    and self._latest_alive_count < self._last_alive_count
+                )
+                alive_increased = (
+                    self._last_alive_count > 0
+                    and self._latest_alive_count > self._last_alive_count
+                )
+                # Churn gate (Fase 3): conta eventos de topologia recentes; se frequentes,
+                # suprime injecao + decai o shift (set_churn_suppress) -> degrada p/ baseline.
+                in_churn = False
+                if self.dual_pulse_layer is not None and DUAL_PULSE_GATE_ENABLE:
+                    if alive_decreased or alive_increased:
+                        self._recent_topo_events.append(float(now))
+                    _cutoff = float(now) - float(DUAL_PULSE_GATE_WINDOW)
+                    self._recent_topo_events = [
+                        _t for _t in self._recent_topo_events if _t >= _cutoff
+                    ]
+                    in_churn = len(self._recent_topo_events) > int(DUAL_PULSE_GATE_MAX_EVENTS)
+                    self.dual_pulse_layer.set_churn_suppress(in_churn)
+                if (
+                    self.dual_pulse_layer is not None
+                    and self.dual_pulse_layer.is_active()
+                    and succ_changed
+                    and not in_warmup
+                    and not in_churn
+                ):
+                    if alive_decreased:
+                        self.dual_pulse_layer.inject_pulse(
+                            originator_id=int(self.node_id)
+                        )
+                    elif alive_increased and self.neighbor_succ_id is not None:
+                        # The new succ IS the recovered drone (it just appeared
+                        # closer to us than the previous succ).
+                        self.dual_pulse_layer.inject_entrada(
+                            originator_id=int(self.node_id),
+                            recovered_id=int(self.neighbor_succ_id),
+                        )
+
+                # Drain dual-pulse completed events into the events log.
+                if self.dual_pulse_layer is not None:
+                    completed = self.dual_pulse_layer.get_completed_events_and_clear()
+                    for ev in completed:
+                        eid = ev.get("event_id", (0, 0))
+                        try:
+                            eid_str = "{}_{}".format(int(eid[0]), int(eid[1]))
+                        except Exception:
+                            eid_str = str(eid)
+                        kind = ev.get("event_type", "SAIDA").lower()  # 'saida' | 'entrada'
+                        is_orig = bool(ev.get("is_originator", False))
+                        ev_type = (
+                            f"dual_pulse_self_shift_{kind}" if is_orig
+                            else f"dual_pulse_event_completed_{kind}"
+                        )
+                        self._event_rows.append({
+                            "timestamp": float(self.provider.current_time()),
+                            "node_id": int(self.node_id),
+                            "event_type": ev_type,
+                            "amplitude": float(ev.get("delta_D", 0.0)),
+                            "event_id": eid_str,
+                            "h_CCW": int(ev.get("h_CCW", 0)),
+                            "h_CW": int(ev.get("h_CW", 0)),
+                            "N_new": int(ev.get("N_new", 0)),
+                        })
+
                 # Update event-trigger memory for next tick.
                 self._last_pred_id_for_event = self.neighbor_pred_id
                 self._last_succ_id_for_event = self.neighbor_succ_id
                 self._last_e_tau_for_event = float(e_tau)
+                self._last_alive_count = int(self._latest_alive_count)
 
                 tangential_output = self.tangential_controller.update(
                     measurement=float(e_tau_used),
@@ -911,8 +1200,33 @@ class AgentProtocol(IProtocol):
                 self.u_local = self._safe_float(tangential_output.u_local)
                 self.u_prop = self._safe_float(tangential_output.u_prop)
 
+                # Mirror the current dual-pulse shift for the telemetry row.
+                if self.dual_pulse_layer is not None:
+                    self.last_dual_pulse_shift = float(
+                        self.dual_pulse_layer.get_shift_remaining()
+                    )
+                    self.last_dual_pulse_target = float(
+                        self.dual_pulse_layer.get_shift_target()
+                    )
+
                 # Final v_tau using the (possibly anti-windup adjusted) self.u
                 v_tau = self.compute_tangential_velocity(self.u, t_hat, r_eff=r_eff)
+
+                # Option B feedforward: a DIRECT tangential velocity that consumes the
+                # agent's remaining shift over T_FF, bypassing the controller gain. Capped
+                # at the actuator speed limit; decays to zero as consume_motion drains the
+                # shift (closed loop on shift_remaining -> ~exp decay with time const T_FF).
+                if dp_ff_shift != 0.0 and DUAL_PULSE_T_FF > 0.0 and math.isfinite(r_eff) and r_eff > 0.0:
+                    v_ff_scalar = (float(dp_ff_shift) / float(DUAL_PULSE_T_FF)) * float(r_eff)
+                    if v_ff_scalar > float(VM_MAX_SPEED_XY):
+                        v_ff_scalar = float(VM_MAX_SPEED_XY)
+                    elif v_ff_scalar < -float(VM_MAX_SPEED_XY):
+                        v_ff_scalar = -float(VM_MAX_SPEED_XY)
+                    v_tau = (
+                        v_tau[0] + v_ff_scalar * t_hat[0],
+                        v_tau[1] + v_ff_scalar * t_hat[1],
+                        v_tau[2],
+                    )
 
                 if SIM_DEBUG:
                     print(
@@ -940,6 +1254,10 @@ class AgentProtocol(IProtocol):
                 u_ss=self.u_ss,
                 prop_state=self.prop_layer.get_broadcast_state(),
                 fast_state=self.fast_layer.get_broadcast_state(),
+                dp_shift=(
+                    float(self.dual_pulse_layer.get_shift_remaining())
+                    if self.dual_pulse_layer is not None else 0.0
+                ),
             )
             message_json = agent_state.to_json()
             command = CommunicationCommand(CommunicationCommandType.BROADCAST, message_json)
@@ -1057,6 +1375,16 @@ class AgentProtocol(IProtocol):
         if not self._csv_path:
             return
 
+        # Skip telemetry rows when the target state hasn't arrived yet.
+        # Without target_state we cannot compute theta_rel correctly (the
+        # default 0.0 misleads downstream heatmaps and metric pipelines into
+        # thinking the agent is at angle 0). Dropping these rows avoids the
+        # spurious "non-equidistant start" artifact that shows up at t≈0.01s
+        # for agents whose first mobility callback fires before the first
+        # TargetState broadcast is delivered.
+        if self.target_state is None:
+            return
+
         now = float(self.provider.current_time())
 
         if self.velocity_handler:
@@ -1067,9 +1395,9 @@ class AgentProtocol(IProtocol):
         v_norm = float(math.sqrt(vx * vx + vy * vy + vz * vz))
 
         # Position relative to target (for spatial ordering in heatmaps).
-        # Computed defensively: 0.0 if target state is missing.
+        # Guaranteed finite here because target_state is not None.
         theta_rel = 0.0
-        if self.velocity_handler and self.target_state is not None:
+        if self.velocity_handler:
             try:
                 pos = self.velocity_handler.get_node_position(self.node_id)
                 ts, _ = self.target_state
@@ -1098,8 +1426,14 @@ class AgentProtocol(IProtocol):
                 "du_from_e_tau": float(self.du_from_e_tau),
 
                 # spacing error
+                # NOTE: with dual_pulse active, e_tau / e_tau_eff are computed
+                # from the VIRTUAL gaps (real_gap +/- shift_remaining); they
+                # reflect what the controller saw. e_tau_real is computed from
+                # the unshifted physical gaps. For non-dual_pulse modes the two
+                # are identical because shift_remaining ≡ 0.
                 "e_tau": float(self.last_e_tau),
                 "e_tau_eff": float(self.last_e_tau_eff),
+                "e_tau_real": float(self.last_e_tau_real),
 
                 "velocity_norm": v_norm,
 
@@ -1107,6 +1441,14 @@ class AgentProtocol(IProtocol):
                 "u_R": float(self.fast_layer.u_R),
                 "u_L": float(self.fast_layer.u_L),
                 "fast_signal": float(self.fast_layer.get_signal()),
+
+                # Dual-pulse shift (radians): non-zero only when the dual_pulse
+                # method is active and there is an in-flight redistribution.
+                # `dual_pulse_shift`  = applied (post-ramp), what the controller saw.
+                # `dual_pulse_target` = ideal accumulated, useful to spot residual
+                #                       (unconsumed shift) at end of run.
+                "dual_pulse_shift": float(self.last_dual_pulse_shift),
+                "dual_pulse_target": float(self.last_dual_pulse_target),
 
                 # Spatial position around target for heatmap ordering
                 "theta_rel": float(theta_rel),
@@ -1127,12 +1469,19 @@ class AgentProtocol(IProtocol):
                     self._csv_path,
                 )
 
-        # Append sparse event log (failure_start, failure_end, pulse_injected).
+        # Append sparse event log. Schema covers the original fast-channel
+        # event types (failure_start, failure_end, pulse_injected) plus the
+        # dual-pulse diagnostic events (dual_pulse_event_completed,
+        # dual_pulse_self_shift). Dual-pulse-specific columns are left blank
+        # for the older event types.
         if self._events_csv_path and self._event_rows:
             try:
                 df_events = pd.DataFrame(
                     self._event_rows,
-                    columns=["timestamp", "node_id", "event_type", "amplitude"],
+                    columns=[
+                        "timestamp", "node_id", "event_type", "amplitude",
+                        "event_id", "h_CCW", "h_CW", "N_new",
+                    ],
                 )
                 file_exists = os.path.exists(self._events_csv_path)
                 df_events.to_csv(
@@ -1148,6 +1497,36 @@ class AgentProtocol(IProtocol):
                     exc,
                     self._events_csv_path,
                 )
+
+        # Final dual-pulse diagnostic: residual shift_remaining at end of run.
+        # In a no-failure run this should be ~0.0 (validation criterion 3).
+        if self.dual_pulse_layer is not None:
+            try:
+                final_shift = float(self.dual_pulse_layer.get_shift_remaining())
+                print(
+                    f"[dual_pulse] Agent {self.node_id}: "
+                    f"final shift_remaining = {final_shift:+.6f} rad"
+                )
+            except Exception:
+                pass
+            # Message-overhead accounting (systems metric): append this node's
+            # total pulse payloads broadcast to a sibling CSV. The scaling-law
+            # analysis sums the column to report messages-per-fault. Lands next
+            # to the agent telemetry CSV, so per-run output dirs keep it isolated.
+            try:
+                _n_msgs = int(self.dual_pulse_layer.get_broadcast_pulse_count())
+                if self._csv_path:
+                    _msg_csv = os.path.join(
+                        os.path.dirname(os.path.abspath(self._csv_path)),
+                        "dual_pulse_messages.csv",
+                    )
+                    _exists = os.path.exists(_msg_csv)
+                    with open(_msg_csv, "a", encoding="utf-8") as _f:
+                        if not _exists:
+                            _f.write("node_id,pulse_payloads_broadcast\n")
+                        _f.write(f"{int(self.node_id)},{_n_msgs}\n")
+            except Exception:
+                pass
 
 
 

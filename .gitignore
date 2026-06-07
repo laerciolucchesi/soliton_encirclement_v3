@@ -43,3 +43,25 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+
+# --- Telemetria por-run (regenerada a cada simulacao) ---
+agent_telemetry.csv
+target_telemetry.csv
+events.csv
+runs_summary.csv
+events_*.csv
+dual_pulse_messages*.csv
+
+# --- Figuras/PNGs (regeneraveis a partir dos *_results.csv via analyze_*.py) ---
+*.png
+
+# --- Diretorios de runs dos experimentos (telemetria intermediaria) ---
+*_runs/
+*_runs_*/
+
+# --- Logs e temporarios ---
+*.log
+err.txt
+
+# --- Diretorio de sessao do agente ---
+.claude/
