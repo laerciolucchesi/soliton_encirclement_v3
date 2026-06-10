@@ -825,5 +825,10 @@ def create_propagation_layer(method: str, params: dict | None = None) -> Propaga
 
     Falls back to BaselineLayer for unknown method names.
     """
+    if method == "dual_pulse":
+        # Lazy import to avoid a circular dependency at module load time
+        # (dual_pulse_layer imports PropagationLayer from this module).
+        from dual_pulse_layer import DualPulseLayer
+        return DualPulseLayer(params or {})
     cls = _REGISTRY.get(method, BaselineLayer)
     return cls(params or {})

@@ -26,7 +26,8 @@ from metrics_util import event_metrics   # helper canonico (t_settle + tau_fit +
 EXP_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(os.path.dirname(EXP_DIR))
 MAIN_PY = os.path.join(REPO_ROOT, "main.py")
-RUNS = os.path.join(EXP_DIR, "churn_runs")
+_TAG = os.environ.get("CHURN_TAG", "")
+RUNS = os.path.join(EXP_DIR, "churn_runs" + (("_" + _TAG) if _TAG else ""))
 
 N = int(os.environ.get("CHURN_N", "24"))
 TAU = 1.0

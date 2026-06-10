@@ -55,6 +55,10 @@ from config_param import (
     DUAL_PULSE_GAP_CLIP_FRAC,
     DUAL_PULSE_MIN_RING_SIZE,
     DUAL_PULSE_N_CLIP,
+    DUAL_PULSE_USE_STAMPED_N,
+    DUAL_PULSE_IDEMPOTENT,
+    DUAL_PULSE_ADD_IF_SETTLED,
+    DUAL_PULSE_SETTLED_EPS,
     DUAL_PULSE_RAMP_TICKS,
     DUAL_PULSE_SLEEP_THRESHOLD,
     DUAL_PULSE_TTL_HOPS,
@@ -304,7 +308,7 @@ class DualPulseLayer(PropagationLayer):
             self.shift_target = min(0.0, self.shift_target - d)
             self.shift_remaining = min(0.0, self.shift_remaining - d)
 
-    def inject_pulse(self, originator_id: int) -> None:
+    def inject_pulse(self, originator_id: int, alive_count: Optional[int] = None) -> None:
         """Inject CCW + CW pulses for a SAIDA event.
 
         Called by the protocol agent on the canonical side of the event
@@ -313,11 +317,19 @@ class DualPulseLayer(PropagationLayer):
         the receiver-side delta_D is computed. The pulses also return to
         this originator after a full loop, where delta_orig is applied via
         the self-originated path in _process_received_pulse.
+
+        alive_count (M2): contagem de vivos do originador. Estampa n_stamp = alive_count+1
+        (= n_old/n_total p/ SAIDA) no pulso; receptores usam-no como tamanho do anel quando
+        DUAL_PULSE_USE_STAMPED_N (em vez do hop-sum, que fica velho sob churn).
         """
         try:
             oid = int(originator_id)
         except Exception:
             return
+        # ESTAMPA SIMETRICA (M2): n_stamp = anel atual incl self = n_new = alive_count+1, IGUAL p/
+        # SAIDA e ENTRADA (alive_count exclui o self). O n_old (que difere por tipo) e' derivado
+        # no receptor a partir do n_new estampado.
+        n_stamp = (int(alive_count) + 1) if alive_count is not None else None
         self.local_seq += 1
         event_id = (oid, int(self.local_seq))
         self._self_originated[event_id] = {"event_type": "SAIDA", "applied": False}
@@ -329,24 +341,31 @@ class DualPulseLayer(PropagationLayer):
                 "direction": direction,
                 "originator_id": oid,
                 "recovered_id": None,  # not used for SAIDA
+                "n_stamp": n_stamp,
             }
             self.pending_pulses_to_forward.append(
                 {"pulse": pulse, "remaining": int(self.BROADCAST_REPEATS)}
             )
 
-    def inject_entrada(self, originator_id: int, recovered_id: int) -> None:
+    def inject_entrada(self, originator_id: int, recovered_id: int,
+                       alive_count: Optional[int] = None) -> None:
         """Inject CCW + CW pulses for an ENTRADA event.
 
         Called by the protocol agent on the canonical side of the recovery
         (the predecessor of the drone that just came back). The pulses
         carry recovered_id so the recovered drone can recognize itself and
         operate in passthrough mode (forward but skip self-shift).
+
+        alive_count (M2): estampa n_stamp = alive_count (= n_new/n_total p/ ENTRADA).
         """
         try:
             oid = int(originator_id)
             rid = int(recovered_id)
         except Exception:
             return
+        # ESTAMPA SIMETRICA (M2): n_stamp = n_new = alive_count+1 (anel atual COM o retornado, incl
+        # self). Mesma forma que SAIDA; o n_old = n_new-1 e' derivado no receptor.
+        n_stamp = (int(alive_count) + 1) if alive_count is not None else None
         self.local_seq += 1
         event_id = (oid, int(self.local_seq))
         self._self_originated[event_id] = {"event_type": "ENTRADA", "applied": False}
@@ -358,6 +377,7 @@ class DualPulseLayer(PropagationLayer):
                 "direction": direction,
                 "originator_id": oid,
                 "recovered_id": rid,
+                "n_stamp": n_stamp,
             }
             self.pending_pulses_to_forward.append(
                 {"pulse": pulse, "remaining": int(self.BROADCAST_REPEATS)}
@@ -458,12 +478,19 @@ class DualPulseLayer(PropagationLayer):
             recovered_id = int(pulse.get("recovered_id")) if pulse.get("recovered_id") is not None else None
         except Exception:
             recovered_id = None
+        try:
+            n_stamp = int(pulse.get("n_stamp")) if pulse.get("n_stamp") is not None else None
+        except Exception:
+            n_stamp = None
+        use_stamp = DUAL_PULSE_USE_STAMPED_N and n_stamp is not None   # M2
 
         # Self-originated returning pulse: apply delta_orig once, do NOT forward.
         if event_id in self._self_originated:
             entry = self._self_originated[event_id]
             if not entry["applied"]:
                 n_new = h  # full-loop hop count = ring size
+                if use_stamp:                                  # M2: estampa simetrica (n_stamp = n_new)
+                    n_new = n_stamp
                 if DUAL_PULSE_N_CLIP and (n_new < int(DUAL_PULSE_MIN_RING_SIZE) or n_new > int(NUM_AGENTS)):
                     entry["applied"] = True   # estimativa de anel corrompida -> nao aplica (mitigacao)
                     return
@@ -497,9 +524,15 @@ class DualPulseLayer(PropagationLayer):
                             * float(DUAL_PULSE_DELTA_SCALE)
                             * alpha_hop
                         )
-                    if math.isfinite(delta_orig) and not self._churn_suppress:
+                    _busy_skip = (
+                        DUAL_PULSE_ADD_IF_SETTLED
+                        and abs(float(self.shift_remaining)) >= float(DUAL_PULSE_SETTLED_EPS)
+                    )  # acumulacao condicional: δ_D chegou com o agente em movimento -> invalido
+                    if math.isfinite(delta_orig) and not self._churn_suppress and not _busy_skip:
+                        # M5: sobrescreve (ultimo evento define) vs acumula (+=)
                         self.shift_target = _safe(
-                            self.shift_target + float(delta_orig)
+                            float(delta_orig) if DUAL_PULSE_IDEMPOTENT
+                            else self.shift_target + float(delta_orig)
                         )
                         self._completed_events.append({
                             "event_id": event_id,
@@ -544,6 +577,7 @@ class DualPulseLayer(PropagationLayer):
                 "direction": direction,
                 "originator_id": pulse.get("originator_id", event_id[0]),
                 "recovered_id": recovered_id,
+                "n_stamp": n_stamp,                 # M2: propaga a estampa do tamanho
             }
             self.pending_pulses_to_forward.append(
                 {"pulse": forwarded, "remaining": int(self.BROADCAST_REPEATS)}
@@ -559,7 +593,10 @@ class DualPulseLayer(PropagationLayer):
             self.processed_events.add(event_id)
             h_ccw = int(rec["CCW"])
             h_cw = int(rec["CW"])
-            n_total = h_ccw + h_cw + 1  # ring size as seen by this receiver
+            n_total = h_ccw + h_cw + 1  # ring size as seen by this receiver (hop-sum)
+            if use_stamp:                                  # M2: estampa simetrica (n_stamp = n_new atual)
+                # n_total e' o pivo da formula legada: n_old p/ SAIDA, n_new p/ ENTRADA.
+                n_total = (n_stamp + 1) if event_type == "SAIDA" else n_stamp
             if DUAL_PULSE_N_CLIP and (n_total < int(DUAL_PULSE_MIN_RING_SIZE) or n_total > int(NUM_AGENTS)):
                 return   # estimativa de anel impossivel (corrompida) -> pula delta_D (ja marcado processed)
             if event_type == "SAIDA":
@@ -592,9 +629,15 @@ class DualPulseLayer(PropagationLayer):
                 * float(DUAL_PULSE_DELTA_SCALE)
                 * alpha_hop
             )
-            if math.isfinite(delta_d) and not self._churn_suppress:
+            _busy_skip = (
+                DUAL_PULSE_ADD_IF_SETTLED
+                and abs(float(self.shift_remaining)) >= float(DUAL_PULSE_SETTLED_EPS)
+            )  # acumulacao condicional: δ_D chegou com o agente em movimento -> invalido
+            if math.isfinite(delta_d) and not self._churn_suppress and not _busy_skip:
+                # M5: sobrescreve (ultimo evento define) vs acumula (+=)
                 self.shift_target = _safe(
-                    self.shift_target + float(delta_d)
+                    float(delta_d) if DUAL_PULSE_IDEMPOTENT
+                    else self.shift_target + float(delta_d)
                 )
                 self._completed_events.append({
                     "event_id": event_id,

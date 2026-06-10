@@ -60,7 +60,11 @@ EXPERIMENT_REPRODUCIBLE: bool = True
 # --------------------------------------------------------------------------------------
 
 # Communication medium defaults
-COMMUNICATION_TRANSMISSION_RANGE: float = 200  # Communication range (meters)
+# env-overridable: para a PROVA da premissa vizinho-apenas (alcance curto ~ poucos vizinhos).
+try:
+    COMMUNICATION_TRANSMISSION_RANGE: float = float(_os.environ.get("COMMUNICATION_TRANSMISSION_RANGE", "200"))
+except ValueError:
+    COMMUNICATION_TRANSMISSION_RANGE = 200.0  # Communication range (meters)
 # env-overridable (Fase 3 - robustez: comunicacao degradada). Defaults 0.0 preservam runs antigos.
 try:
     COMMUNICATION_DELAY: float = float(_os.environ.get("COMMUNICATION_DELAY", "0.0"))   # Communication delay (seconds)
@@ -514,6 +518,46 @@ try:
     DUAL_PULSE_GATE_MAX_EVENTS: int = int(_os.environ.get("DUAL_PULSE_GATE_MAX_EVENTS", "1"))
 except ValueError:
     DUAL_PULSE_GATE_MAX_EVENTS = 1
+
+# DUAL_PULSE_CONSUME_FF_ONLY (M8, Fase 3 redesign): no consume_motion, abater so a rotacao de
+# redistribuicao COMANDADA pelo feedforward ((v_ff/r)*dt, ja clipada por saturacao), NAO o Δθ total
+# medido (que sob MANOBRA inclui a rotacao de tracking -> sub-redistribuicao). So aplica a B/B2
+# (onde existe v_ff). Default off (A/B). Constante: sem efeito (Δθ_ff ≈ Δθ_total).
+# DEFAULT TRUE (validado): seguro em todo regime (estacionario/constante = no-op; manobra = ajuda,
+# inclusive churn+manobra 1,16-1,20; tracking intacto). Desligavel com DUAL_PULSE_CONSUME_FF_ONLY=False.
+DUAL_PULSE_CONSUME_FF_ONLY: bool = (
+    _os.environ.get("DUAL_PULSE_CONSUME_FF_ONLY", "True").strip().lower() in ("true", "1", "yes", "y")
+)
+
+# DUAL_PULSE_USE_STAMPED_N (M2-núcleo, Fase 3 redesign): o δ_D usa o TAMANHO do anel ESTAMPADO pelo
+# originador na injeção (sua contagem de vivos = M_eff), em vez do hop-sum (h_CCW+h_CW+1) inferido
+# DURANTE o voo do pulso (que fica velho/inconsistente sob churn). h_CCW (posição) continua do hop.
+# Um valor consistente por evento -> correções coerentes. Default off (A/B).
+DUAL_PULSE_USE_STAMPED_N: bool = (
+    _os.environ.get("DUAL_PULSE_USE_STAMPED_N", "False").strip().lower() in ("true", "1", "yes", "y")
+)
+
+# DUAL_PULSE_IDEMPOTENT (M5, Fase 3 redesign): na chegada de um δ_D, SOBRESCREVE o shift_target
+# (= o ultimo evento DEFINE o alvo de redistribuicao) em vez de ACUMULAR (+=). Sob churn denso a
+# acumulacao empilha correcoes calculadas para aneis que ja nao existem (~20/24 nos em transito
+# permanente -> agitacao). Sobrescrever testa se descartar o historico reduz a agitacao. Em evento
+# unico e' equivalente a somar (shift_target parte de 0). Default off (A/B).
+DUAL_PULSE_IDEMPOTENT: bool = (
+    _os.environ.get("DUAL_PULSE_IDEMPOTENT", "False").strip().lower() in ("true", "1", "yes", "y")
+)
+
+# DUAL_PULSE_ADD_IF_SETTLED (acumulacao CONDICIONAL, Fase 3 redesign): so ACUMULA o δ_D se o agente
+# estava ASSENTADO (|shift_remaining| < DUAL_PULSE_SETTLED_EPS) quando ele chegou -> δ_D VALIDO
+# (anel local uniforme = a hipotese do calculo). Se o agente estava em movimento (redistribuindo), o
+# δ_D foi calculado p/ uma config que nao existe -> INVALIDO -> DESCARTA. Visa o melhor dos dois:
+# soma os validos (quedas simultaneas/eventos discretos) e descarta os velhos (churn). Default off.
+DUAL_PULSE_ADD_IF_SETTLED: bool = (
+    _os.environ.get("DUAL_PULSE_ADD_IF_SETTLED", "False").strip().lower() in ("true", "1", "yes", "y")
+)
+try:
+    DUAL_PULSE_SETTLED_EPS: float = float(_os.environ.get("DUAL_PULSE_SETTLED_EPS", "0.02"))
+except ValueError:
+    DUAL_PULSE_SETTLED_EPS = 0.02
 
 # DUAL_PULSE_ALPHA_CLOSE_RATIO: hop-distance attenuation of delta_D.
 # Receivers close to the dead/recovered drone D already feel a strong

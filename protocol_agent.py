@@ -68,6 +68,7 @@ from config_param import (
     DUAL_PULSE_GATE_ENABLE,
     DUAL_PULSE_GATE_WINDOW,
     DUAL_PULSE_GATE_MAX_EVENTS,
+    DUAL_PULSE_CONSUME_FF_ONLY,
     )
 
 
@@ -205,6 +206,8 @@ class AgentProtocol(IProtocol):
         # displacement between control ticks and feed it to consume_motion().
         # Initialized lazily on the first tick when theta_i is available.
         self._last_theta_i_for_dual_pulse: Optional[float] = None
+        # M8: rotacao de redistribuicao COMANDADA pelo FF no tick anterior (p/ consume_motion).
+        self._last_ff_dtheta_for_consume: float = 0.0
         # Latest dual-pulse shift values, mirrored here for telemetry.
         # last_dual_pulse_shift   = applied shift (post-ramp); same as
         #                           layer.get_shift_remaining(); fed to
@@ -974,7 +977,12 @@ class AgentProtocol(IProtocol):
                             )
                         except Exception:
                             d_theta = 0.0
-                        self.dual_pulse_layer.consume_motion(d_theta)
+                        if DUAL_PULSE_CONSUME_FF_ONLY and DUAL_PULSE_INTEGRATION in ("B", "B2"):
+                            # M8: abate so a rotacao de redistribuicao comandada pelo FF (tick
+                            # anterior), nao o Δθ total (que sob manobra inclui rotacao de tracking).
+                            self.dual_pulse_layer.consume_motion(self._last_ff_dtheta_for_consume)
+                        else:
+                            self.dual_pulse_layer.consume_motion(d_theta)
                     if theta_i_now is not None:
                         self._last_theta_i_for_dual_pulse = float(theta_i_now)
 
@@ -1099,24 +1107,22 @@ class AgentProtocol(IProtocol):
                 # delta_D / delta_orig formulas. Independent of the fast_layer
                 # threshold: a missing successor is the event itself.
                 #
-                # SAIDA / ENTRADA gate via alive-neighbor count delta:
-                #   alive_decreased → drone left  → SAIDA event
-                #   alive_increased → drone returned → ENTRADA event
-                # Both share the same trigger surface (succ_changed pos-warmup),
-                # only the formula and pulse payload differ.
-                alive_decreased = (
-                    self._last_alive_count > 0
-                    and self._latest_alive_count < self._last_alive_count
+                # SAIDA vs ENTRADA detectado LOCALMENTE pelo frescor do succ ANTERIOR
+                # (vizinho-apenas; NAO usa alive_count global, que viola a premissa de comunicacao
+                # so-entre-vizinhos). succ_changed e':
+                #   - SAIDA   se o meu succ anterior MORREU (ficou stale) -> succ novo e' o de tras
+                #   - ENTRADA se o meu succ anterior CONTINUA vivo -> um drone apareceu entre nos
+                _old_succ_alive = (
+                    self._last_succ_id_for_event is not None
+                    and self._agent_is_alive(int(self._last_succ_id_for_event), now)
                 )
-                alive_increased = (
-                    self._last_alive_count > 0
-                    and self._latest_alive_count > self._last_alive_count
-                )
+                saida = bool(succ_changed) and not _old_succ_alive
+                entrada = bool(succ_changed) and _old_succ_alive
                 # Churn gate (Fase 3): conta eventos de topologia recentes; se frequentes,
                 # suprime injecao + decai o shift (set_churn_suppress) -> degrada p/ baseline.
                 in_churn = False
                 if self.dual_pulse_layer is not None and DUAL_PULSE_GATE_ENABLE:
-                    if alive_decreased or alive_increased:
+                    if succ_changed:
                         self._recent_topo_events.append(float(now))
                     _cutoff = float(now) - float(DUAL_PULSE_GATE_WINDOW)
                     self._recent_topo_events = [
@@ -1131,11 +1137,12 @@ class AgentProtocol(IProtocol):
                     and not in_warmup
                     and not in_churn
                 ):
-                    if alive_decreased:
+                    if saida:
+                        # N do delta_D vem do HOP-SUM (vizinho-apenas), nao de contagem global.
                         self.dual_pulse_layer.inject_pulse(
-                            originator_id=int(self.node_id)
+                            originator_id=int(self.node_id),
                         )
-                    elif alive_increased and self.neighbor_succ_id is not None:
+                    elif entrada and self.neighbor_succ_id is not None:
                         # The new succ IS the recovered drone (it just appeared
                         # closer to us than the previous succ).
                         self.dual_pulse_layer.inject_entrada(
@@ -1216,12 +1223,18 @@ class AgentProtocol(IProtocol):
                 # agent's remaining shift over T_FF, bypassing the controller gain. Capped
                 # at the actuator speed limit; decays to zero as consume_motion drains the
                 # shift (closed loop on shift_remaining -> ~exp decay with time const T_FF).
+                self._last_ff_dtheta_for_consume = 0.0   # M8: zera; setado abaixo se o FF atuar
                 if dp_ff_shift != 0.0 and DUAL_PULSE_T_FF > 0.0 and math.isfinite(r_eff) and r_eff > 0.0:
                     v_ff_scalar = (float(dp_ff_shift) / float(DUAL_PULSE_T_FF)) * float(r_eff)
                     if v_ff_scalar > float(VM_MAX_SPEED_XY):
                         v_ff_scalar = float(VM_MAX_SPEED_XY)
                     elif v_ff_scalar < -float(VM_MAX_SPEED_XY):
                         v_ff_scalar = -float(VM_MAX_SPEED_XY)
+                    # M8: rotacao de redistribuicao comandada (v_ff/r * dt), ja clipada por
+                    # saturacao; consumida no proximo tick (em vez do Δθ medido) quando o flag liga.
+                    self._last_ff_dtheta_for_consume = (
+                        (v_ff_scalar / float(r_eff)) * float(self.control_period)
+                    )
                     v_tau = (
                         v_tau[0] + v_ff_scalar * t_hat[0],
                         v_tau[1] + v_ff_scalar * t_hat[1],

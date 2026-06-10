@@ -83,11 +83,25 @@ def scenario_env(scenario, n, seed):
                   "COMMUNICATION_DELAY": "0.05"})
         has_event = True
     elif scenario == "churn_sparse":
+        # gate DESLIGADO: com o gatilho premissa-limpo o overlay AJUDA sob churn (o gate atrapalha).
         e.update({"FAILURE_ENABLE": "True", "FAILURE_MEAN_FAILURES_PER_MIN": f"{6.0 / n:.6f}",
-                  "FAILURE_OFF_TIME": "8.0", "DUAL_PULSE_GATE_ENABLE": "True"})  # gate B ligado
+                  "FAILURE_OFF_TIME": "8.0", "DUAL_PULSE_GATE_ENABLE": "False"})
     elif scenario == "churn_dense":
         e.update({"FAILURE_ENABLE": "True", "FAILURE_MEAN_FAILURES_PER_MIN": f"{24.0 / n:.6f}",
-                  "FAILURE_OFF_TIME": "8.0", "DUAL_PULSE_GATE_ENABLE": "True"})
+                  "FAILURE_OFF_TIME": "8.0", "DUAL_PULSE_GATE_ENABLE": "False"})
+    elif scenario == "recover":
+        # ENTRADA controlada: falha determinística em t0 e RECUPERA em t0+OFF (testa a detecção
+        # local de ENTRADA com o gatilho premissa-limpo).
+        e.update({"DETERMINISTIC_FAILURE_ENABLE": "True", "FAILURE_ENABLE": "True",
+                  "DETERMINISTIC_FAILURE_AGENT_ID": str(victim_node_id(n, seed)),
+                  "DETERMINISTIC_FAILURE_TIME_T0": str(T0), "DETERMINISTIC_FAILURE_OFF_TIME": "10.0"})
+        has_event = True
+    elif scenario == "stress":
+        # TUDO junto: churn medio-denso + perda (com FD-fix) + atraso ABAIXO do onset (5*dt) + M8.
+        e.update({"FAILURE_ENABLE": "True", "FAILURE_MEAN_FAILURES_PER_MIN": f"{18.0 / n:.6f}",
+                  "FAILURE_OFF_TIME": "8.0", "DUAL_PULSE_GATE_ENABLE": "False",
+                  "COMMUNICATION_FAILURE_RATE": "0.1", "AGENT_STATE_TIMEOUT": "0.2",
+                  "COMMUNICATION_DELAY": "0.02"})
     return e, has_event
 
 

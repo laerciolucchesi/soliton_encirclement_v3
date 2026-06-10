@@ -71,14 +71,19 @@ mobility_config = VelocityMobilityConfiguration(
 
 
 _METHODS = [
-    ("baseline",  "Controlador atual — sem propagação (referência de comparação)"),
-    ("advection", "Advecção-Difusão Amortecida Bidirecional"),
-    ("wave",      "Onda de Segunda Ordem"),
-    ("excitable", "Meio Excitável — FitzHugh-Nagumo"),
-    ("kdv",       "KdV Discreto — Soliton-Inspired"),
-    ("alarm",     "Alarmes Discretos com TTL"),
+    ("baseline",   "Controlador atual — sem propagação (referência de comparação)"),
+    ("advection",  "Advecção-Difusão Amortecida Bidirecional"),
+    ("wave",       "Onda de Segunda Ordem"),
+    ("excitable",  "Meio Excitável — FitzHugh-Nagumo"),
+    ("kdv",        "KdV Discreto — Soliton-Inspired"),
+    ("alarm",      "Alarmes Discretos com TTL"),
     ("burgers",   "Burgers Amortecido com Saturação"),
+    ("dual_pulse", "Pulsos Contra-Propagantes Duais com Descoberta de Topologia por Hop Count"),
 ]
+
+# Methods that do NOT use the u_prop channel (k_prop irrelevant; menu skips
+# the prompt). Keep this list in sync with method semantics in propagation_layer.
+_METHODS_WITHOUT_K_PROP = {"baseline", "dual_pulse"}
 
 
 def _select_propagation_method() -> tuple:
@@ -92,7 +97,7 @@ def _select_propagation_method() -> tuple:
             raise ValueError(
                 f"PROPAGATION_METHOD={env_method!r} is invalid; expected one of {sorted(valid)}"
             )
-        if env_method == "baseline":
+        if env_method in _METHODS_WITHOUT_K_PROP:
             k_prop = 0.0
         else:
             try:
@@ -118,7 +123,7 @@ def _select_propagation_method() -> tuple:
     method = _METHODS[choice][0]
 
     k_prop = 0.0
-    if method != "baseline":
+    if method not in _METHODS_WITHOUT_K_PROP:
         while True:
             try:
                 raw = input("  Ganho K_PROP (sugestão: 1.0, Enter para 1.0): ").strip()
@@ -145,8 +150,14 @@ def main():
     os.environ["PROPAGATION_PARAMS"] = "{}"
 
     # Global deterministic randomness for reproducibility across the whole project.
+    # EXPERIMENT_SEED env var allows Monte Carlo sweeps over multiple seeds
+    # without editing source. Default 0 reproduces the legacy single-seed runs.
     if EXPERIMENT_REPRODUCIBLE:
-        random.seed(0)
+        try:
+            _seed = int(os.environ.get("EXPERIMENT_SEED", "0"))
+        except ValueError:
+            _seed = 0
+        random.seed(_seed)
 
     # Create a shared CSV file for agent telemetry logs.
     csv_path = os.path.join(os.getcwd(), "agent_telemetry.csv")
@@ -171,6 +182,13 @@ def main():
     os.environ["EVENTS_LOG_CSV_PATH"] = events_csv_path
     if os.path.exists(events_csv_path):
         os.remove(events_csv_path)
+
+    # Dual-pulse message-count CSV (appended by AgentProtocol.finish()). Wipe it so a
+    # reused working directory does not accumulate rows across runs (which silently
+    # inflates the summed message count).
+    dpmsg_csv_path = os.path.join(os.getcwd(), "dual_pulse_messages.csv")
+    if os.path.exists(dpmsg_csv_path):
+        os.remove(dpmsg_csv_path)
 
     duration = SIM_DURATION        # Simulation duration (seconds)
     real_time = SIM_REAL_TIME      # Run in real time (True) or as-fast-as-possible (False)

@@ -13,7 +13,7 @@ class AgentState:
 
     TYPE = "AgentState"
 
-    def __init__(self, agent_id, seq, position, velocity, u, u_ss=0.0, prop_state=None, fast_state=None):
+    def __init__(self, agent_id, seq, position, velocity, u, u_ss=0.0, prop_state=None, fast_state=None, dp_shift=0.0):
         self.agent_id = agent_id
         self.seq = seq
         self.position = position  # (x, y, z)
@@ -21,6 +21,9 @@ class AgentState:
         self.u = u  # tangential internal state (scalar)
         # Discrete second spatial derivative / curvature (1-hop): u_succ - 2*u + u_pred
         self.u_ss = u_ss
+        # dual_pulse remaining shift (rad). Broadcast so neighbours can build the
+        # Option-B cancelling bias (succ+s_succ, pred-s_pred). 0.0 when dual_pulse inactive.
+        self.dp_shift = dp_shift
         # Propagation layer state (method-specific dict; empty for baseline)
         self.prop_state: dict = prop_state if isinstance(prop_state, dict) else {}
         # Fast-channel (DampedAdvectionLayer) broadcast state. Independent of
@@ -40,6 +43,7 @@ class AgentState:
                 "u_ss": self.u_ss,
                 "prop_state": self.prop_state,
                 "fast_state": self.fast_state,
+                "dp_shift": self.dp_shift,
                 "sender_id": self.agent_id,
             }
         )
@@ -61,6 +65,7 @@ class AgentState:
             u_ss=message_dict.get("u_ss", 0.0),
             prop_state=message_dict.get("prop_state") or {},
             fast_state=message_dict.get("fast_state") or {},
+            dp_shift=message_dict.get("dp_shift", 0.0),
         )
 
 

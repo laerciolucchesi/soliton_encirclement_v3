@@ -1,4 +1,9 @@
-"""Plot telemetry per node and compute the 7 metrics based on e(t)=|e_tau(t)|.
+"""Plot telemetry per node and compute the 7 metrics based on e(t)=|e_tau_real(t)|.
+
+Metrics (M1..M7) are computed from the physical spacing error ``e_tau_real``
+when the column is present, falling back to ``e_tau`` for older runs that
+predate the dual_pulse layer. For non-dual_pulse methods the two columns
+coincide (shift_remaining ≡ 0), so this fallback is exact.
 
 Expected CSV columns (agent_telemetry.csv):
     node_id, timestamp, e_tau, u, velocity_norm
@@ -153,8 +158,14 @@ def compute_metrics(df: pd.DataFrame, params: MetricParams) -> Dict[str, float]:
     # Sort for stable diff.
     df = df.sort_values(["node_id", "timestamp"]).reset_index(drop=True)
 
-    # e(t)=|e_tau(t)|
-    df["e"] = df["e_tau"].abs()
+    # e(t)=|e_tau(t)| — prefer the physical (unshifted) error e_tau_real when
+    # available. With dual_pulse active, e_tau is the VIRTUAL error (computed
+    # from gaps biased by shift_remaining); e_tau_real is the unbiased physical
+    # error and is the right quantity for cross-method M1..M7 comparisons.
+    # Older runs predating the e_tau_real column fall back to e_tau (identical
+    # to e_tau_real for non-dual_pulse methods, since shift_remaining ≡ 0).
+    err_col = "e_tau_real" if "e_tau_real" in df.columns else "e_tau"
+    df["e"] = df[err_col].abs()
 
     # M1..M6 window: t > t0
     df_w = df[df["timestamp"] > params.t0].copy()
@@ -223,16 +234,21 @@ def compute_metrics(df: pd.DataFrame, params: MetricParams) -> Dict[str, float]:
         m6 = float(np.mean(vraw >= (params.vmax_xy - tol)))
 
     # ---------- M7 (Transient): settling time per node ----------
-    # NOTE: M7 is computed over the whole run (t>=0) because it's about how fast the system enters regime.
+    # M7 honors the same t0 window as M1..M6: the per-node settling time is the
+    # first t > t0 such that e(t) <= e_thr for a continuous settle_window. With
+    # t0 = 0 this captures the cold-start convergence; setting t0 just before a
+    # disturbance event (e.g. a node failure) makes M7 the post-event recovery
+    # time, which is the right cross-method comparison for dual_pulse runs.
+    # The settling time is reported relative to t0 (i.e. t_settled - t0).
     settle_times = []
-    for _, g in df.groupby("node_id", sort=False):
+    for _, g in df_w.groupby("node_id", sort=False):
         t = g["timestamp"].to_numpy(dtype=float)
         e = g["e"].to_numpy(dtype=float)
         if t.size == 0:
             continue
         ts = _settling_time(t, e, params.e_thr, params.settle_window, params.dt)
         if ts is not None and math.isfinite(ts):
-            settle_times.append(ts)
+            settle_times.append(ts - float(params.t0))
 
     if len(settle_times) == 0:
         m7_med = float("nan")
@@ -259,11 +275,15 @@ def compute_metrics(df: pd.DataFrame, params: MetricParams) -> Dict[str, float]:
     }
 
 
-def print_metrics(metrics: Dict[str, float], params: MetricParams) -> None:
+def print_metrics(
+    metrics: Dict[str, float],
+    params: MetricParams,
+    err_label: str = "e_tau",
+) -> None:
     ma_samp = int(metrics.get("_ma_win_samples", 0))
     st_samp = int(metrics.get("_settle_win_samples", 0))
 
-    print("\n=== METRICS (using e(t)=|e_tau(t)|) ===")
+    print(f"\n=== METRICS (using e(t)=|{err_label}(t)|) ===")
     print(f"Window for M1..M6: t > t0, with t0 = {params.t0:.3f} s")
     print(
         f"Settling for M7: e_thr = {params.e_thr:.6f}, settle_window = {params.settle_window:.3f} s "
@@ -314,8 +334,26 @@ def plot_per_node(df: pd.DataFrame, df_events: Optional[pd.DataFrame] = None) ->
         fig, axes = plt.subplots(n_subplots, 1, sharex=True, figsize=(12, 2.5 * n_subplots))
         fig.suptitle(f"Node {int(node_id)} telemetry")
 
-        axes[0].plot(t, g["e_tau"].to_numpy(dtype=float))
-        axes[0].set_ylabel("e_tau")
+        # Plot the physical error (e_tau_real) as the main line. When
+        # dual_pulse is active, e_tau is the VIRTUAL value the controller
+        # saw; show it as a thin dashed overlay so divergence is visible.
+        if "e_tau_real" in g.columns:
+            axes[0].plot(t, g["e_tau_real"].to_numpy(dtype=float), label="e_tau_real (physical)")
+            if "e_tau" in g.columns:
+                e_real = g["e_tau_real"].to_numpy(dtype=float)
+                e_virt = g["e_tau"].to_numpy(dtype=float)
+                # only overlay when there's actual divergence (i.e. dual_pulse active)
+                if (abs(e_virt - e_real) > 1e-12).any():
+                    axes[0].plot(
+                        t, e_virt,
+                        linestyle="--", linewidth=0.8, alpha=0.7,
+                        label="e_tau (virtual / controller-input)",
+                    )
+                    axes[0].legend(loc="best", fontsize=8)
+            axes[0].set_ylabel("e_tau_real")
+        else:
+            axes[0].plot(t, g["e_tau"].to_numpy(dtype=float))
+            axes[0].set_ylabel("e_tau")
         axes[0].grid(True)
 
         axes[1].plot(t, g["u"].to_numpy(dtype=float), label="u", linewidth=2.0)
@@ -766,17 +804,25 @@ def main(csv_path: str = CSV_DEFAULT_PATH, summary_csv_path: Optional[str] = Non
     )
 
     metrics = compute_metrics(df, params)
-    print_metrics(metrics, params)
+    err_label = "e_tau_real" if "e_tau_real" in df.columns else "e_tau"
+    print_metrics(metrics, params, err_label=err_label)
 
     # Load sparse event log for the fast-channel visualizations.
     events_csv_path = os.environ.get("EVENTS_LOG_CSV_PATH", EVENTS_CSV_DEFAULT_PATH)
     df_events = _load_events_csv(events_csv_path)
 
-    plot_per_node(df, df_events=df_events)
-    plot_spatiotemporal_heatmap(df, df_events=df_events)
-    if df_events is not None:
-        plot_event_timeline(df_events)
-        plot_spatiotemporal_zoom_around_failures(df, df_events, t_window=2.0)
+    # SKIP_TELEMETRY_PLOTS=true skips PNG generation but still computes and
+    # appends metrics to runs_summary.csv. Useful for Monte Carlo sweeps.
+    skip_plots = (
+        os.environ.get("SKIP_TELEMETRY_PLOTS", "False").strip().lower()
+        in ("true", "1", "yes", "y")
+    )
+    if not skip_plots:
+        plot_per_node(df, df_events=df_events)
+        plot_spatiotemporal_heatmap(df, df_events=df_events)
+        if df_events is not None:
+            plot_event_timeline(df_events)
+            plot_spatiotemporal_zoom_around_failures(df, df_events, t_window=2.0)
 
     # Resolve summary path: explicit arg > env var > default. Pass an empty
     # string (either via arg or env var) to skip the append step.
