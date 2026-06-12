@@ -44,8 +44,7 @@ soliton_encirclement_v3/
 ├── pyproject.toml               # Editable install; src/ is the package root
 ├── README.md, CONTROLE.md       # User documentation; control-law derivations
 ├── src/
-│   ├── velocity_mobility/       # Reusable velocity-driven mobility handler
-│   └── gradysim_velocity_mobility/  # Back-compat shim — re-exports velocity_mobility
+│   └── velocity_mobility/       # Reusable velocity-driven mobility handler
 ├── demos/velocity_mobility/     # Standalone mobility demo (single node)
 ├── examples/                    # Core-only (no GrADyS runtime) examples
 └── tests/                       # pytest: test_controllers, test_core_*,
@@ -109,10 +108,10 @@ Tests: `python -m pytest` (configured in `pyproject.toml`,
 
 ## Architecture notes
 
-### Two-package install layout
+### Package install layout
 
 `pyproject.toml` declares `package-dir = {"" = "src"}` and only ships
-`velocity_mobility` and `gradysim_velocity_mobility`. The protocol files
+`velocity_mobility`. The protocol files
 at the repo **root** (`protocol_agent.py`, `controllers.py`,
 `propagation_layer.py`, `dual_pulse_layer.py`, `config_param.py`, …)
 are **not** part of the installed package — they are imported by `main.py`
@@ -380,8 +379,6 @@ header-less files.
 - **Don't mass-edit telemetry PNGs / CSVs.** Many tracked PNGs are
   regenerated on every run (`git status` after a sim run will show them
   as modified). Avoid committing them unless the change is intentional.
-- **`gradysim_velocity_mobility` is a back-compat shim only.** New code
-  should import from `velocity_mobility`.
 - **Numerical stability of propagation layers.** Each layer documents its
   CFL / stiffness assumptions in its docstring. The `excitable` (FHN)
   layer uses 4 internal RK1 substeps per control tick because

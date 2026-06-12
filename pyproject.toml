@@ -47,7 +47,6 @@ package-dir = {"" = "src"}
 where = ["src"]
 include = [
     "velocity_mobility*",
-    "gradysim_velocity_mobility*",
 ]
 
 [tool.pytest.ini_options]

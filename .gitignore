@@ -60,6 +60,9 @@ telemetry_*.csv
 *_runs/
 *_runs_*/
 
+# --- Regenerable figure cache (rebuilt by experiments/scaling_law/make_figures.py) ---
+experiments/scaling_law/figures/_cache/
+
 # --- Large reference binaries (kept locally, not versioned) ---
 *.mp4
 *.mat

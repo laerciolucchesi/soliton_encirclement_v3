@@ -3,9 +3,6 @@
 This package contains the reusable velocity mobility handler and its pure
 math core. It is intended to be imported by a larger project.
 
-Back-compat:
-- The legacy module name `gradysim_velocity_mobility` is kept as a shim.
-
 Author: Laercio Lucchesi
 """
 
