@@ -1,0 +1,9 @@
+# Runtime dependencies for the soliton_encirclement_v3 simulation.
+#
+# The authoritative dependency list lives in pyproject.toml; this file is a
+# convenience for `pip install -r requirements.txt`. For a development install
+# (editable + test tools) prefer:  pip install -e ".[dev]"
+gradysim>=0.7.0
+pandas>=2.0
+matplotlib>=3.7
+simple-pid>=2.0

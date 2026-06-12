@@ -60,10 +60,6 @@ def _drain_broadcast(layer: DualPulseLayer) -> dict:
     return layer.get_broadcast_state()
 
 
-def _step(layer: DualPulseLayer, pred_state: dict, succ_state: dict) -> None:
-    layer.update(0.0, DT, pred_state, succ_state)
-
-
 def _ring_step(layers, broadcasts):
     """Advance one tick on a ring of N layers given the previous-tick broadcasts.
 

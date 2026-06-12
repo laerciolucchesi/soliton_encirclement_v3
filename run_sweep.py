@@ -31,7 +31,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import math
 import os
 import subprocess
 import sys
@@ -44,6 +43,11 @@ from typing import List, Set, Tuple
 REPO_ROOT = Path(__file__).resolve().parent
 RUNS_SUMMARY_PATH = REPO_ROOT / "runs_summary.csv"
 
+# This sweep targets the legacy u_prop-channel propagation methods, which are
+# parameterized by K_PROP and the tangential composition mode. The flagship
+# `dual_pulse` method is deliberately excluded: it ignores both K_PROP and the
+# composition mode (it integrates via Option A gap-bias, not the u_prop channel),
+# so it is benchmarked separately under experiments/scaling_law/.
 PROPAGATION_METHODS: Tuple[str, ...] = (
     "advection",
     "wave",

@@ -71,14 +71,14 @@ mobility_config = VelocityMobilityConfiguration(
 
 
 _METHODS = [
-    ("baseline",   "Controlador atual — sem propagação (referência de comparação)"),
-    ("advection",  "Advecção-Difusão Amortecida Bidirecional"),
-    ("wave",       "Onda de Segunda Ordem"),
-    ("excitable",  "Meio Excitável — FitzHugh-Nagumo"),
-    ("kdv",        "KdV Discreto — Soliton-Inspired"),
-    ("alarm",      "Alarmes Discretos com TTL"),
-    ("burgers",   "Burgers Amortecido com Saturação"),
-    ("dual_pulse", "Pulsos Contra-Propagantes Duais com Descoberta de Topologia por Hop Count"),
+    ("baseline",   "Current controller - no propagation (comparison baseline)"),
+    ("advection",  "Bidirectional damped advection-diffusion"),
+    ("wave",       "Second-order wave"),
+    ("excitable",  "Excitable medium - FitzHugh-Nagumo"),
+    ("kdv",        "Discrete KdV - soliton-inspired"),
+    ("alarm",      "Discrete alarms with TTL"),
+    ("burgers",    "Damped Burgers with saturation"),
+    ("dual_pulse", "Dual counter-propagating pulses with hop-count topology discovery"),
 ]
 
 # Methods that do NOT use the u_prop channel (k_prop irrelevant; menu skips
@@ -106,35 +106,35 @@ def _select_propagation_method() -> tuple:
                 k_prop = 1.0
             if not (k_prop == k_prop) or k_prop < 0.0:  # NaN-safe + non-negative guard
                 k_prop = 1.0
-        print(f"\n  → Método: {env_method}  |  K_PROP: {k_prop}  (from environment)\n")
+        print(f"\n  -> Method: {env_method}  |  K_PROP: {k_prop}  (from environment)\n")
         return env_method, k_prop
 
-    print("\n=== Seleção do Método de Propagação ===")
+    print("\n=== Propagation Method Selection ===")
     for i, (key, desc) in enumerate(_METHODS):
-        print(f"  [{i}] {key:12s} — {desc}")
+        print(f"  [{i}] {key:12s} - {desc}")
     while True:
         try:
-            choice = int(input(f"\nEscolha o método [0-{len(_METHODS) - 1}]: ").strip())
+            choice = int(input(f"\nChoose a method [0-{len(_METHODS) - 1}]: ").strip())
             if 0 <= choice < len(_METHODS):
                 break
         except (ValueError, EOFError):
             pass
-        print(f"  Entrada inválida. Digite um número entre 0 e {len(_METHODS) - 1}.")
+        print(f"  Invalid input. Enter a number between 0 and {len(_METHODS) - 1}.")
     method = _METHODS[choice][0]
 
     k_prop = 0.0
     if method not in _METHODS_WITHOUT_K_PROP:
         while True:
             try:
-                raw = input("  Ganho K_PROP (sugestão: 1.0, Enter para 1.0): ").strip()
+                raw = input("  K_PROP gain (suggested: 1.0, Enter for 1.0): ").strip()
                 k_prop = float(raw) if raw else 1.0
                 if k_prop >= 0.0:
                     break
             except (ValueError, EOFError):
                 pass
-            print("  Valor inválido. Digite um número ≥ 0.")
+            print("  Invalid value. Enter a number >= 0.")
 
-    print(f"\n  → Método: {method}  |  K_PROP: {k_prop}\n")
+    print(f"\n  -> Method: {method}  |  K_PROP: {k_prop}\n")
     return method, k_prop
 
 

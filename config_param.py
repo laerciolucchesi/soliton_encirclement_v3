@@ -16,7 +16,7 @@ import os as _os
 # --------------------------------------------------------------------------------------
 
 # Base control loop period (seconds) for the "muscular" u controller.
-# env-overridable (dt / control-period study, Fase 2 — colapso adimensional). A single
+# env-overridable (dt / control-period study, Phase 2 — dimensionless collapse). A single
 # `dt` drives the control loop, the state-broadcast periods (below) AND the mobility
 # update (VM_UPDATE_RATE, tied to it in section 3). Default 0.01 keeps all prior runs identical.
 try:
@@ -60,12 +60,12 @@ EXPERIMENT_REPRODUCIBLE: bool = True
 # --------------------------------------------------------------------------------------
 
 # Communication medium defaults
-# env-overridable: para a PROVA da premissa vizinho-apenas (alcance curto ~ poucos vizinhos).
+# env-overridable: for the PROOF of the neighbor-only premise (short range ~ few neighbors).
 try:
     COMMUNICATION_TRANSMISSION_RANGE: float = float(_os.environ.get("COMMUNICATION_TRANSMISSION_RANGE", "200"))
 except ValueError:
     COMMUNICATION_TRANSMISSION_RANGE = 200.0  # Communication range (meters)
-# env-overridable (Fase 3 - robustez: comunicacao degradada). Defaults 0.0 preservam runs antigos.
+# env-overridable (Phase 3 - robustness: degraded communication). Defaults 0.0 preserve old runs.
 try:
     COMMUNICATION_DELAY: float = float(_os.environ.get("COMMUNICATION_DELAY", "0.0"))   # Communication delay (seconds)
 except ValueError:
@@ -118,8 +118,8 @@ VM_TELEMETRY_DECIMATION: int = 1    # Send telemetry every update
 # Move the target with a constant speed setpoint in the XY plane,
 # changing direction randomly at a fixed period.
 TARGET_MOTION_TIMER_STR: str = "target_motion_timer"
-# env-overridable (Fase 3 Track C - alvo movel). PERIOD enorme + BOUNDARY grande => ~velocidade
-# constante; PERIOD pequeno (1s) => manobra (direcao aleatoria nova a cada periodo).
+# env-overridable (Phase 3 Track C - moving target). Huge PERIOD + large BOUNDARY => ~constant
+# velocity; small PERIOD (1s) => maneuver (new random direction every period).
 try:
     TARGET_MOTION_PERIOD: float = float(_os.environ.get("TARGET_MOTION_PERIOD", "1.0"))
 except ValueError:
@@ -159,7 +159,7 @@ ADVERSARY_ROAM_SPEED_XY: float = 0.0 #4.0
 # Note: in this project the target never fails; only agents can.
 FAILURE_CHECK_TIMER_STR: str = "failure_check_timer"
 FAILURE_RECOVER_TIMER_STR: str = "failure_recover_timer"
-# env-overridable (Fase 3 - churn): permite varrer densidade de falhas e tempo de recuperacao.
+# env-overridable (Phase 3 - churn): allows sweeping failure density and recovery time.
 FAILURE_ENABLE: bool = (
     _os.environ.get("FAILURE_ENABLE", "True").strip().lower() in ("true", "1", "yes", "y")
 )
@@ -196,8 +196,8 @@ DETERMINISTIC_FAILURE_ENABLE: bool = (
     _os.environ.get("DETERMINISTIC_FAILURE_ENABLE", "True").strip().lower()
     in ("true", "1", "yes", "y")
 )
-# Aceita LISTA separada por virgula (Fase 3 churn: falhar k vitimas de uma vez, cenarios A/B).
-# DETERMINISTIC_FAILURE_AGENT_ID mantem o primeiro id (back-compat); _IDS e' o conjunto completo.
+# Accepts a comma-separated LIST (Phase 3 churn: fail k victims at once, scenarios A/B).
+# DETERMINISTIC_FAILURE_AGENT_ID keeps the first id (back-compat); _IDS is the full set.
 _raw_det_ids = _os.environ.get("DETERMINISTIC_FAILURE_AGENT_ID", "6")
 _det_ids = []
 for _tok in _raw_det_ids.split(","):
@@ -229,9 +229,9 @@ except ValueError:
 # Protocol liveness / neighbor selection tuning
 # Note: these values are local (not transmitted) and are expressed in seconds/radians.
 # Timeout guards are scaled with CONTROL_PERIOD.
-# AgentState liveness timeout (s). Default 5*dt; env-overridable (Fase 3). Um detector de falhas
-# sob perda de pacote precisa de timeout >> (perdas consecutivas)*broadcast_period, senao vizinhos
-# vivos "piscam" mortos (tempestade de falsos SAIDA/ENTRADA). Escalar com a taxa de perda.
+# AgentState liveness timeout (s). Default 5*dt; env-overridable (Phase 3). A failure detector
+# under packet loss needs a timeout >> (consecutive losses)*broadcast_period, otherwise live
+# neighbors "flicker" as dead (storm of false SAIDA/ENTRADA). Scale with the loss rate.
 try:
     AGENT_STATE_TIMEOUT: float = float(_os.environ["AGENT_STATE_TIMEOUT"])
 except (KeyError, ValueError):
@@ -489,7 +489,7 @@ if DUAL_PULSE_RAMP_TICKS < 1:
 
 # DUAL_PULSE_BROADCAST_REPEATS: how many consecutive ticks each outgoing pulse is
 # re-broadcast (redundancy against intra-tick firing order / packet loss). Default 2.
-# env-overridable (Fase 3 - robustez: trade-off banda x robustez sob perda de pacote).
+# env-overridable (Phase 3 - robustness: bandwidth vs robustness trade-off under packet loss).
 try:
     DUAL_PULSE_BROADCAST_REPEATS: int = int(_os.environ.get("DUAL_PULSE_BROADCAST_REPEATS", "2"))
 except ValueError:
@@ -497,16 +497,16 @@ except ValueError:
 if DUAL_PULSE_BROADCAST_REPEATS < 1:
     DUAL_PULSE_BROADCAST_REPEATS = 1
 
-# DUAL_PULSE_N_CLIP: rejeita eventos cujo tamanho de anel inferido (hop-count) e' IMPOSSIVEL
-# (< MIN_RING ou > NUM_AGENTS) -> nao aplica delta_D corrompido. Mitiga corrupcao de N sob churn
-# (topologia muda durante o voo do pulso). Default False (env A/B). Fase 3 Track B.
+# DUAL_PULSE_N_CLIP: rejects events whose inferred ring size (hop-count) is IMPOSSIBLE
+# (< MIN_RING or > NUM_AGENTS) -> does not apply a corrupted delta_D. Mitigates N corruption under
+# churn (topology changes during the pulse's flight). Default False (env A/B). Phase 3 Track B.
 DUAL_PULSE_N_CLIP: bool = (
     _os.environ.get("DUAL_PULSE_N_CLIP", "False").strip().lower() in ("true", "1", "yes", "y")
 )
 
-# DUAL_PULSE_GATE_*: "gating" do overlay sob churn denso (Fase 3 Track B). Quando eventos de
-# topologia ficam frequentes (> GATE_MAX_EVENTS em GATE_WINDOW s) o agente SUPRIME injecao e
-# DECAI o shift -> degrada para o baseline (rede de seguranca) em vez de atrapalhar. Default off.
+# DUAL_PULSE_GATE_*: "gating" of the overlay under dense churn (Phase 3 Track B). When topology
+# events become frequent (> GATE_MAX_EVENTS in GATE_WINDOW s) the agent SUPPRESSES injection and
+# DECAYS the shift -> degrades to the baseline (safety net) instead of interfering. Default off.
 DUAL_PULSE_GATE_ENABLE: bool = (
     _os.environ.get("DUAL_PULSE_GATE_ENABLE", "False").strip().lower() in ("true", "1", "yes", "y")
 )
@@ -519,38 +519,39 @@ try:
 except ValueError:
     DUAL_PULSE_GATE_MAX_EVENTS = 1
 
-# DUAL_PULSE_CONSUME_FF_ONLY (M8, Fase 3 redesign): no consume_motion, abater so a rotacao de
-# redistribuicao COMANDADA pelo feedforward ((v_ff/r)*dt, ja clipada por saturacao), NAO o Δθ total
-# medido (que sob MANOBRA inclui a rotacao de tracking -> sub-redistribuicao). So aplica a B/B2
-# (onde existe v_ff). Default off (A/B). Constante: sem efeito (Δθ_ff ≈ Δθ_total).
-# DEFAULT TRUE (validado): seguro em todo regime (estacionario/constante = no-op; manobra = ajuda,
-# inclusive churn+manobra 1,16-1,20; tracking intacto). Desligavel com DUAL_PULSE_CONSUME_FF_ONLY=False.
+# DUAL_PULSE_CONSUME_FF_ONLY (M8, Phase 3 redesign): in consume_motion, deduct only the
+# redistribution rotation COMMANDED by the feedforward ((v_ff/r)*dt, already clipped by saturation),
+# NOT the total measured Δθ (which under MANEUVER includes the tracking rotation -> under-
+# redistribution). Only applies to B/B2 (where v_ff exists). Default off (A/B). Constant: no effect
+# (Δθ_ff ≈ Δθ_total).
+# DEFAULT TRUE (validated): safe in every regime (stationary/constant = no-op; maneuver = helps,
+# including churn+maneuver 1.16-1.20; tracking intact). Disable with DUAL_PULSE_CONSUME_FF_ONLY=False.
 DUAL_PULSE_CONSUME_FF_ONLY: bool = (
     _os.environ.get("DUAL_PULSE_CONSUME_FF_ONLY", "True").strip().lower() in ("true", "1", "yes", "y")
 )
 
-# DUAL_PULSE_USE_STAMPED_N (M2-núcleo, Fase 3 redesign): o δ_D usa o TAMANHO do anel ESTAMPADO pelo
-# originador na injeção (sua contagem de vivos = M_eff), em vez do hop-sum (h_CCW+h_CW+1) inferido
-# DURANTE o voo do pulso (que fica velho/inconsistente sob churn). h_CCW (posição) continua do hop.
-# Um valor consistente por evento -> correções coerentes. Default off (A/B).
+# DUAL_PULSE_USE_STAMPED_N (M2-core, Phase 3 redesign): δ_D uses the ring SIZE STAMPED by the
+# originator at injection (its alive count = M_eff), instead of the hop-sum (h_CCW+h_CW+1) inferred
+# DURING the pulse's flight (which becomes stale/inconsistent under churn). h_CCW (position) still
+# comes from the hop. A value consistent per event -> coherent corrections. Default off (A/B).
 DUAL_PULSE_USE_STAMPED_N: bool = (
     _os.environ.get("DUAL_PULSE_USE_STAMPED_N", "False").strip().lower() in ("true", "1", "yes", "y")
 )
 
-# DUAL_PULSE_IDEMPOTENT (M5, Fase 3 redesign): na chegada de um δ_D, SOBRESCREVE o shift_target
-# (= o ultimo evento DEFINE o alvo de redistribuicao) em vez de ACUMULAR (+=). Sob churn denso a
-# acumulacao empilha correcoes calculadas para aneis que ja nao existem (~20/24 nos em transito
-# permanente -> agitacao). Sobrescrever testa se descartar o historico reduz a agitacao. Em evento
-# unico e' equivalente a somar (shift_target parte de 0). Default off (A/B).
+# DUAL_PULSE_IDEMPOTENT (M5, Phase 3 redesign): on arrival of a δ_D, OVERWRITES shift_target
+# (= the last event DEFINES the redistribution target) instead of ACCUMULATING (+=). Under dense
+# churn, accumulation stacks corrections computed for rings that no longer exist (~20/24 nodes in
+# permanent transit -> agitation). Overwriting tests whether discarding the history reduces the
+# agitation. For a single event it is equivalent to summing (shift_target starts from 0). Default off (A/B).
 DUAL_PULSE_IDEMPOTENT: bool = (
     _os.environ.get("DUAL_PULSE_IDEMPOTENT", "False").strip().lower() in ("true", "1", "yes", "y")
 )
 
-# DUAL_PULSE_ADD_IF_SETTLED (acumulacao CONDICIONAL, Fase 3 redesign): so ACUMULA o δ_D se o agente
-# estava ASSENTADO (|shift_remaining| < DUAL_PULSE_SETTLED_EPS) quando ele chegou -> δ_D VALIDO
-# (anel local uniforme = a hipotese do calculo). Se o agente estava em movimento (redistribuindo), o
-# δ_D foi calculado p/ uma config que nao existe -> INVALIDO -> DESCARTA. Visa o melhor dos dois:
-# soma os validos (quedas simultaneas/eventos discretos) e descarta os velhos (churn). Default off.
+# DUAL_PULSE_ADD_IF_SETTLED (CONDITIONAL accumulation, Phase 3 redesign): only ACCUMULATES the δ_D
+# if the agent was SETTLED (|shift_remaining| < DUAL_PULSE_SETTLED_EPS) when it arrived -> VALID δ_D
+# (uniform local ring = the calculation's hypothesis). If the agent was moving (redistributing), the
+# δ_D was computed for a config that does not exist -> INVALID -> DISCARD. Aims for the best of both:
+# sums the valid ones (simultaneous failures/discrete events) and discards the stale ones (churn). Default off.
 DUAL_PULSE_ADD_IF_SETTLED: bool = (
     _os.environ.get("DUAL_PULSE_ADD_IF_SETTLED", "False").strip().lower() in ("true", "1", "yes", "y")
 )

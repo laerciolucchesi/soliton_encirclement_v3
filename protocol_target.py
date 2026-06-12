@@ -2,7 +2,6 @@
 Protocol for the target node.
 """
 import logging
-from bisect import bisect_right
 import math
 import os
 import random
@@ -287,43 +286,6 @@ class TargetProtocol(IProtocol):
         self.alive_lambdas[agent_id_int] = float(self._special_lambda_value)
         self._special_agent_id = agent_id_int
 
-    def _pick_predecessor_by_angle(self, *, angle_ref: float, target_pos: Tuple[float, float, float], alive_ids: list[int]) -> int:
-        """Pick the predecessor (in sorted target-centric angle order) of a reference angle.
-
-        This implements the policy for transferring the special lambda when its owner fails.
-
-        Rationale (arc-based lambda interpretation):
-        - A node's lambda applies to the arc (node -> successor).
-        - If the node holding lambda=27 fails, assigning 27 to its predecessor makes the new
-          enlarged arc span across the failed node's location, preserving the formation shape.
-        """
-        two_pi = 2.0 * math.pi
-        angles_and_ids: list[tuple[float, int]] = []
-        for aid in alive_ids:
-            entry = self.agent_states.get(aid)
-            if entry is None:
-                continue
-            state, _ = entry
-            dx = float(state.position[0] - target_pos[0])
-            dy = float(state.position[1] - target_pos[1])
-            theta = math.atan2(dy, dx)
-            if not math.isfinite(theta):
-                continue
-            theta = (theta + two_pi) % two_pi
-            angles_and_ids.append((theta, aid))
-
-        if not angles_and_ids:
-            return int(alive_ids[0])
-
-        angles_and_ids.sort(key=lambda t: t[0])
-        angles = [t[0] for t in angles_and_ids]
-        ids = [t[1] for t in angles_and_ids]
-
-        # Find where angle_ref would be inserted to keep ordering; predecessor is just before.
-        idx = bisect_right(angles, float(angle_ref))
-        pred_idx = (idx - 1) % len(ids)
-        return int(ids[pred_idx])
-    
     def schedule_broadcast_timer(self):
         self.provider.schedule_timer(TARGET_STATE_BROADCAST_TIMER_STR, self.provider.current_time() + self.target_state_broadcast_period)
 
@@ -705,9 +667,7 @@ class TargetProtocol(IProtocol):
                     if i < M - 1:
                         gap = angles[i + 1] - angles[i]
                     else:
-                        # Initialize new agents with lp=1.0 (default). Keep it even if it already exists.
-                        if state.agent_id not in self.alive_lambdas:
-                            self.alive_lambdas[state.agent_id] = 1.0
+                        # Wrap-around gap between the last and first sorted angle.
                         gap = angles[0] + two_pi - angles[-1]
 
                     if not math.isfinite(gap):

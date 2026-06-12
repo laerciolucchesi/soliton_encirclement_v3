@@ -1,8 +1,8 @@
 """Protocol for the adversary node.
 
-Skeleton implementation:
-- Broadcasts AdversaryState containing node_id, seq, position, velocity.
-- Motion strategy is intentionally left minimal/undefined for now.
+- Broadcasts AdversaryState (node_id, seq, position, velocity) every period.
+- Roams randomly within a bounded XY region while keeping a minimum distance
+  from the target. Roaming is disabled by default (ADVERSARY_ROAM_SPEED_XY = 0.0).
 """
 
 import json
@@ -25,7 +25,7 @@ from protocol_messages import AdversaryState, TargetState
 
 
 class AdversaryProtocol(IProtocol):
-    """Implementation of adversary protocol (skeleton)."""
+    """Random-roaming intruder that broadcasts its state for the swarm to track."""
 
     def __init__(self):
         super().__init__()

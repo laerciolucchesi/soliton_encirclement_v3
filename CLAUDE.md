@@ -403,12 +403,15 @@ header-less files.
 
 ## What's intentionally out of scope here
 
-- The KdV `.m`, `.mat`, `.mp4` files at the repo root are MATLAB
-  reference material from earlier exploration of soliton dynamics.
-  They are not used by the Python simulation.
-- `metrics.pptx`, `equacoes_controle_tangencial*.md`, and
-  `Ideias relacionadas ao projeto soliton.md` are working notes for the
-  thesis; treat them as read-only context unless asked to update them.
+- The thesis material and reference binaries have been **moved out of the
+  repository** to a sibling local archive (`../_soliton_v3_local_archive/`)
+  to keep the public repo lean. That archive holds: the Portuguese thesis
+  drafts (former `docs/` tree, `equacoes_controle_tangencial*.md`,
+  `Ideias relacionadas ao projeto soliton.md`), the MATLAB `.m`/`.mat`/`.mp4`
+  KdV reference material, `metrics.pptx`, and the orphaned figure/diagnostic
+  scripts (`plot_limiter_soft.py`, `diagnose_signs.py`). None of these are
+  used by the Python simulation. The control-law reference that stays public
+  is `CONTROLE.md`.
 - The other 6 propagation methods (`advection`, `wave`, `excitable`,
   `kdv`, `alarm`, `burgers`) are kept in the codebase for completeness
   but are documented as **earlier failed attempts** by the user. The

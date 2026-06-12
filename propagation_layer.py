@@ -81,7 +81,7 @@ def _get(state: dict | None, key: str, default: float = 0.0) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Mecanismo 0: BaselineLayer — current controller, no propagation
+# Mechanism 0: BaselineLayer — current controller, no propagation
 # ---------------------------------------------------------------------------
 
 class BaselineLayer(PropagationLayer):
@@ -105,7 +105,7 @@ class BaselineLayer(PropagationLayer):
 
 
 # ---------------------------------------------------------------------------
-# Mecanismo 1: AdvectionLayer — Advecção-Difusão Amortecida Bidirecional
+# Mechanism 1: AdvectionLayer — Bidirectional Damped Advection-Diffusion
 # ---------------------------------------------------------------------------
 
 class AdvectionLayer(PropagationLayer):
@@ -200,7 +200,7 @@ class AdvectionLayer(PropagationLayer):
 
 
 # ---------------------------------------------------------------------------
-# Mecanismo 2: WaveLayer — Onda de Segunda Ordem
+# Mechanism 2: WaveLayer — Second-Order Wave
 # ---------------------------------------------------------------------------
 
 class WaveLayer(PropagationLayer):
@@ -282,7 +282,7 @@ class WaveLayer(PropagationLayer):
 
 
 # ---------------------------------------------------------------------------
-# Mecanismo 3: ExcitableLayer — Meio Excitável (FitzHugh-Nagumo)
+# Mechanism 3: ExcitableLayer — Excitable Medium (FitzHugh-Nagumo)
 # ---------------------------------------------------------------------------
 
 def _fhn_equilibrium(a: float, b: float):
@@ -409,7 +409,7 @@ class ExcitableLayer(PropagationLayer):
 
 
 # ---------------------------------------------------------------------------
-# Mecanismo 4: KdVLayer — KdV Discreto (Soliton-Inspired)
+# Mechanism 4: KdVLayer — Discrete KdV (Soliton-Inspired)
 # ---------------------------------------------------------------------------
 
 class KdVLayer(PropagationLayer):
@@ -497,7 +497,7 @@ class KdVLayer(PropagationLayer):
 
 
 # ---------------------------------------------------------------------------
-# Mecanismo 5: AlarmLayer — Alarmes Discretos com TTL
+# Mechanism 5: AlarmLayer — Discrete Alarms with TTL
 # ---------------------------------------------------------------------------
 
 _INACTIVE_ALARM = {"active": False, "polarity": 0.0, "intensity": 0.0, "ttl": 0}
@@ -618,7 +618,7 @@ class AlarmLayer(PropagationLayer):
 
 
 # ---------------------------------------------------------------------------
-# Mecanismo 6: BurgersLayer — Burgers Amortecido com Saturação
+# Mechanism 6: BurgersLayer — Damped Burgers with Saturation
 # ---------------------------------------------------------------------------
 
 class BurgersLayer(PropagationLayer):
@@ -719,7 +719,7 @@ class BurgersLayer(PropagationLayer):
 
 
 # ---------------------------------------------------------------------------
-# Mecanismo 7: DampedAdvectionLayer — canal soliton-like event-triggered
+# Mechanism 7: DampedAdvectionLayer — event-triggered soliton-like channel
 # ---------------------------------------------------------------------------
 
 class DampedAdvectionLayer(PropagationLayer):

@@ -10,6 +10,7 @@ The main focus of this repository is the end-to-end encirclement simulation:
 - [protocol_target.py](protocol_target.py): target state broadcast + optional target motion + swarm spin PD + global error metrics
 - [protocol_adversary.py](protocol_adversary.py): adversary node — random roaming intruder used by the swarm spin controller
 - [propagation_layer.py](propagation_layer.py): pluggable fast-information channels (baseline, advection, wave, FHN, KdV, alarm, Burgers)
+- [dual_pulse_layer.py](dual_pulse_layer.py): the flagship `dual_pulse` mechanism — counter-propagating discrete pulses with hop-count topology discovery
 - [controllers.py](controllers.py): radial PD, wrapped-angle PD, and the two-channel tangential controller
 - [config_param.py](config_param.py): centralized configuration knobs
 
@@ -39,37 +40,62 @@ python main.py
 ```
 
 On startup, `main.py` prompts for a **propagation method** (the
-fast-information channel that augments the tangential controller) and a
-gain `K_PROP`:
+fast-information channel that augments the tangential controller) and,
+for the `u_prop`-based methods, a gain `K_PROP`:
 
 ```
-=== Seleção do Método de Propagação ===
-  [0] baseline     — sem propagação (referência de comparação)
-  [1] advection    — Advecção-Difusão Amortecida Bidirecional
-  [2] wave         — Onda de Segunda Ordem
-  [3] excitable    — Meio Excitável (FitzHugh-Nagumo)
-  [4] kdv          — KdV Discreto (Soliton-Inspired)
-  [5] alarm        — Alarmes Discretos com TTL
-  [6] burgers      — Burgers Amortecido com Saturação
+=== Propagation Method Selection ===
+  [0] baseline     - Current controller - no propagation (comparison baseline)
+  [1] advection    - Bidirectional damped advection-diffusion
+  [2] wave         - Second-order wave
+  [3] excitable    - Excitable medium - FitzHugh-Nagumo
+  [4] kdv          - Discrete KdV - soliton-inspired
+  [5] alarm        - Discrete alarms with TTL
+  [6] burgers      - Damped Burgers with saturation
+  [7] dual_pulse   - Dual counter-propagating pulses with hop-count topology discovery
 ```
 
-`baseline` reproduces the previous (single-channel) controller exactly;
-the other methods enable the propagated channel `u_prop` described
-below. For batch/non-interactive runs you can preset
-`PROPAGATION_METHOD`, `PROPAGATION_K_PROP`, and `PROPAGATION_PARAMS`
-(JSON) as environment variables and stub stdin.
+`baseline` reproduces the previous (single-channel) controller exactly.
+Methods `[1]`–`[6]` enable the propagated channel `u_prop` described
+below (and prompt for `K_PROP`). `[7] dual_pulse` is the **flagship**
+method used in current research: it discovers ring topology with
+counter-propagating hop-count pulses and biases the spacing-error gaps
+directly ("Option A") instead of feeding `u_prop`, so it ignores `K_PROP`.
 
 Most parameters are in [config_param.py](config_param.py) (simulation duration, number of agents, desired radius, controller gains, failure injection, target motion, swarm-spin PD).
+
+### Batch / non-interactive runs
+
+Most tunables in [config_param.py](config_param.py) accept environment-variable
+overrides applied at import time, so sweeps need no source edits. Setting
+`PROPAGATION_METHOD` also bypasses the interactive menu entirely (no stdin
+needed). Example:
+
+```powershell
+$env:PROPAGATION_METHOD = "dual_pulse"   # skips the menu
+$env:NUM_AGENTS         = "24"
+$env:SIM_DURATION       = "120"
+$env:EXPERIMENT_SEED    = "3"            # Monte Carlo seed (EXPERIMENT_REPRODUCIBLE=True)
+python main.py
+```
+
+For `dual_pulse` and `baseline`, `K_PROP` is irrelevant and the prompt is
+skipped. See `config_param.py` for the full set of overridable knobs
+(failure rate, communication delay/loss, target motion, `dual_pulse` tuning, …).
 
 ## Outputs
 
 The simulation writes files next to where you run it:
 
 - `agent_telemetry.csv` (written by agents on `finish()`)
-    - Columns: `node_id,timestamp,dt_u,u,u_local,u_prop,u_ss,prop_signal,delta_u,du_damp,du_from_e_tau,e_tau,e_tau_eff,velocity_norm`
+    - Columns: `node_id,timestamp,dt_u,u,u_local,u_prop,u_ss,prop_signal,delta_u,du_damp,du_from_e_tau,e_tau,e_tau_eff,e_tau_real,velocity_norm,u_R,u_L,fast_signal,dual_pulse_shift,dual_pulse_target,theta_rel`
+    - Use `e_tau_real` (physical spacing error from unmodified gaps) for cross-method comparisons; with `dual_pulse` active, `e_tau`/`e_tau_eff` reflect the *virtual* (gap-biased) error the controller saw.
 - `target_telemetry.csv` (written by the target on `finish()`)
     - Columns: `timestamp,E_r,E_vr,rho,G_max,E_gap`
-- `metric_E_r.png`, `metric_E_vr.png`, `metric_rho.png`, `metric_G_max.png`, `metric_E_gap.png`
+- `events.csv` (sparse event log: `failure_start/end`, pulse injections, dual_pulse self-shift/completion)
+    - Columns: `timestamp,node_id,event_type,amplitude,event_id,h_CCW,h_CW,N_new`
+- `dual_pulse_messages.csv` (per-run dual_pulse broadcast counts; written only when `dual_pulse` is active)
+- `metric_E_r.png`, `metric_E_vr.png`, `metric_rho.png`, `metric_G_max.png`, `metric_E_gap.png`, `events_timeline.png`, and per-node `node_<id>_telemetry.png`
     - Generated at the end of the simulation if `matplotlib` is available.
 
 ### Plotting agent control outputs (plot_telemetry.py)
@@ -202,6 +228,21 @@ Each propagation mechanism broadcasts a method-specific
 tick using its predecessor's and successor's broadcast state. Mechanism
 docstrings document the model, parameters, and stability assumptions.
 
+#### Dual pulse (flagship method)
+
+`dual_pulse` ([dual_pulse_layer.py](dual_pulse_layer.py)) is the method
+used in current research. On a topology event (an agent failing or
+recovering) the dead/recovered drone's predecessor injects two
+counter-propagating pulses tagged with hop counts. Once a node has seen
+the pulse arrive from both directions it knows its hop position in the
+ring and computes the angular shift needed to redistribute uniformly in
+the new ring size — all from local information, with no global agent
+count. Unlike the `u_prop` layers, this shift is **not** fed in as a
+second control channel; it biases the `pred_gap` / `succ_gap`
+measurements the spacing controller already consumes ("Option A"), so the
+existing dynamics drive the redistribution. The `DUAL_PULSE_*` knobs in
+[config_param.py](config_param.py) tune it.
+
 ### Final commanded velocity
 
 The final command is:
@@ -238,6 +279,10 @@ If a mobility handler exists, it can also move in the XY plane:
 - if it is outside `TARGET_MOTION_BOUNDARY_XY`, it steers back toward the origin
 
 ### Swarm spin controller and adversary
+
+> **Both are disabled by default:** `TARGET_SWARM_SPIN_ENABLE = False` and
+> `ADVERSARY_ROAM_SPEED_XY = 0.0`, so out of the box the swarm does not spin
+> and the adversary stays put. Enable them in [config_param.py](config_param.py).
 
 When `TARGET_SWARM_SPIN_ENABLE=True`, the target runs a wrapped-angle PD
 controller on the angle between the swarm's resultant unit vector
@@ -336,8 +381,8 @@ Run the test suite with pytest:
 # Run all tests
 python -m pytest
 
-# Run with coverage
-python -m pytest --cov=velocity_mobility --cov-report=html
+# Run with coverage (root modules + the velocity_mobility package)
+python -m pytest --cov=. --cov-report=html
 
 # Run specific test file
 python -m pytest tests/test_core_limits.py -v

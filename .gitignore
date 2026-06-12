@@ -44,24 +44,30 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
-# --- Telemetria por-run (regenerada a cada simulacao) ---
+# --- Per-run telemetry (regenerated on every simulation) ---
 agent_telemetry.csv
 target_telemetry.csv
 events.csv
-runs_summary.csv
 events_*.csv
 dual_pulse_messages*.csv
+runs_summary*.csv
+telemetry_*.csv
 
-# --- Figuras/PNGs (regeneraveis a partir dos *_results.csv via analyze_*.py) ---
+# --- Figures / PNGs (regenerated from *_results.csv by the analyze_*.py scripts) ---
 *.png
 
-# --- Diretorios de runs dos experimentos (telemetria intermediaria) ---
+# --- Experiment run directories (intermediate telemetry) ---
 *_runs/
 *_runs_*/
 
-# --- Logs e temporarios ---
+# --- Large reference binaries (kept locally, not versioned) ---
+*.mp4
+*.mat
+*.pptx
+
+# --- Logs and temporaries ---
 *.log
 err.txt
 
-# --- Diretorio de sessao do agente ---
+# --- Agent session directory ---
 .claude/

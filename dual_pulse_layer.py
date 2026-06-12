@@ -120,7 +120,7 @@ class DualPulseLayer(PropagationLayer):
         # Diagnostic events drained by the agent after each update().
         self._completed_events: list = []
         self._active: bool = True
-        self._churn_suppress: bool = False   # gate (Fase 3): suprime overlay sob churn denso
+        self._churn_suppress: bool = False   # gate (Phase 3): suppress overlay under dense churn
         # The owning node's id, set by protocol_agent after construction.
         # Required to detect ENTRADA passthrough mode (when the recovered
         # drone forwards the ENTRADA pulse without applying delta to itself).
@@ -141,7 +141,7 @@ class DualPulseLayer(PropagationLayer):
         return bool(self._active)
 
     def set_churn_suppress(self, suppress: bool) -> None:
-        """Gate (Fase 3): quando True, nao acumula novos delta_D e decai o shift -> baseline."""
+        """Gate (Phase 3): when True, do not accumulate new delta_D and decay the shift -> baseline."""
         self._churn_suppress = bool(suppress)
 
     def update(self, e_tau, dt, pred_state, succ_state):
@@ -182,7 +182,7 @@ class DualPulseLayer(PropagationLayer):
         # instantaneous step. With RAMP_TICKS>1 the controller sees the
         # virtual gaps shift smoothly over a few ticks instead of as a jolt.
         if self._churn_suppress:
-            self.shift_target = 0.0   # gate: zera o alvo -> a rampa decai o shift p/ baseline
+            self.shift_target = 0.0   # gate: zero the target -> the ramp decays the shift to baseline
         gap = float(self.shift_target) - float(self.shift_remaining)
         if abs(gap) > 1e-15:
             step = gap / float(int(DUAL_PULSE_RAMP_TICKS))
@@ -286,10 +286,14 @@ class DualPulseLayer(PropagationLayer):
         together as motion is consumed, so the lerp continues to converge
         on the (decreasing) target as the agent rotates.
 
-        Caveat: when TARGET_SWARM_SPIN_ENABLE=True the spin contribution to
-        delta_theta WILL be erroneously consumed when shift is non-zero,
-        producing a slight under-shift. v1 keeps spin off by default;
-        revisit this when enabling spin alongside dual_pulse.
+        Note: `delta_theta` is whatever the caller (protocol_agent) chooses to
+        report. With DUAL_PULSE_CONSUME_FF_ONLY (default for integration modes
+        B/B2) the caller passes only the feedforward-commanded redistribution
+        rotation, so tracking/spin motion is NOT consumed. For the default
+        integration mode "A" the caller passes the full inter-tick Δθ; with
+        TARGET_SWARM_SPIN_ENABLE=True that spin contribution would then be
+        erroneously consumed while a shift is pending (slight under-shift).
+        Spin is off by default, so this does not affect the shipped config.
         """
         if abs(self.shift_target) < 1e-12 and abs(self.shift_remaining) < 1e-12:
             return
@@ -318,17 +322,17 @@ class DualPulseLayer(PropagationLayer):
         this originator after a full loop, where delta_orig is applied via
         the self-originated path in _process_received_pulse.
 
-        alive_count (M2): contagem de vivos do originador. Estampa n_stamp = alive_count+1
-        (= n_old/n_total p/ SAIDA) no pulso; receptores usam-no como tamanho do anel quando
-        DUAL_PULSE_USE_STAMPED_N (em vez do hop-sum, que fica velho sob churn).
+        alive_count (M2): originator's alive count. Stamps n_stamp = alive_count+1
+        (= n_old/n_total for SAIDA) on the pulse; receivers use it as the ring size when
+        DUAL_PULSE_USE_STAMPED_N (instead of the hop-sum, which goes stale under churn).
         """
         try:
             oid = int(originator_id)
         except Exception:
             return
-        # ESTAMPA SIMETRICA (M2): n_stamp = anel atual incl self = n_new = alive_count+1, IGUAL p/
-        # SAIDA e ENTRADA (alive_count exclui o self). O n_old (que difere por tipo) e' derivado
-        # no receptor a partir do n_new estampado.
+        # SYMMETRIC STAMP (M2): n_stamp = current ring incl self = n_new = alive_count+1, SAME for
+        # SAIDA and ENTRADA (alive_count excludes self). The n_old (which differs by type) is derived
+        # at the receiver from the stamped n_new.
         n_stamp = (int(alive_count) + 1) if alive_count is not None else None
         self.local_seq += 1
         event_id = (oid, int(self.local_seq))
@@ -356,15 +360,15 @@ class DualPulseLayer(PropagationLayer):
         carry recovered_id so the recovered drone can recognize itself and
         operate in passthrough mode (forward but skip self-shift).
 
-        alive_count (M2): estampa n_stamp = alive_count (= n_new/n_total p/ ENTRADA).
+        alive_count (M2): stamps n_stamp = alive_count (= n_new/n_total for ENTRADA).
         """
         try:
             oid = int(originator_id)
             rid = int(recovered_id)
         except Exception:
             return
-        # ESTAMPA SIMETRICA (M2): n_stamp = n_new = alive_count+1 (anel atual COM o retornado, incl
-        # self). Mesma forma que SAIDA; o n_old = n_new-1 e' derivado no receptor.
+        # SYMMETRIC STAMP (M2): n_stamp = n_new = alive_count+1 (current ring WITH the returned one, incl
+        # self). Same shape as SAIDA; the n_old = n_new-1 is derived at the receiver.
         n_stamp = (int(alive_count) + 1) if alive_count is not None else None
         self.local_seq += 1
         event_id = (oid, int(self.local_seq))
@@ -489,10 +493,10 @@ class DualPulseLayer(PropagationLayer):
             entry = self._self_originated[event_id]
             if not entry["applied"]:
                 n_new = h  # full-loop hop count = ring size
-                if use_stamp:                                  # M2: estampa simetrica (n_stamp = n_new)
+                if use_stamp:                                  # M2: symmetric stamp (n_stamp = n_new)
                     n_new = n_stamp
                 if DUAL_PULSE_N_CLIP and (n_new < int(DUAL_PULSE_MIN_RING_SIZE) or n_new > int(NUM_AGENTS)):
-                    entry["applied"] = True   # estimativa de anel corrompida -> nao aplica (mitigacao)
+                    entry["applied"] = True   # corrupted ring estimate -> do not apply (mitigation)
                     return
                 if n_new >= int(DUAL_PULSE_MIN_RING_SIZE):
                     # Originator is by construction the immediate neighbor of
@@ -527,9 +531,9 @@ class DualPulseLayer(PropagationLayer):
                     _busy_skip = (
                         DUAL_PULSE_ADD_IF_SETTLED
                         and abs(float(self.shift_remaining)) >= float(DUAL_PULSE_SETTLED_EPS)
-                    )  # acumulacao condicional: δ_D chegou com o agente em movimento -> invalido
+                    )  # conditional accumulation: delta_D arrived with the agent in motion -> invalid
                     if math.isfinite(delta_orig) and not self._churn_suppress and not _busy_skip:
-                        # M5: sobrescreve (ultimo evento define) vs acumula (+=)
+                        # M5: overwrite (last event wins) vs accumulate (+=)
                         self.shift_target = _safe(
                             float(delta_orig) if DUAL_PULSE_IDEMPOTENT
                             else self.shift_target + float(delta_orig)
@@ -577,7 +581,7 @@ class DualPulseLayer(PropagationLayer):
                 "direction": direction,
                 "originator_id": pulse.get("originator_id", event_id[0]),
                 "recovered_id": recovered_id,
-                "n_stamp": n_stamp,                 # M2: propaga a estampa do tamanho
+                "n_stamp": n_stamp,                 # M2: propagate the size stamp
             }
             self.pending_pulses_to_forward.append(
                 {"pulse": forwarded, "remaining": int(self.BROADCAST_REPEATS)}
@@ -594,11 +598,11 @@ class DualPulseLayer(PropagationLayer):
             h_ccw = int(rec["CCW"])
             h_cw = int(rec["CW"])
             n_total = h_ccw + h_cw + 1  # ring size as seen by this receiver (hop-sum)
-            if use_stamp:                                  # M2: estampa simetrica (n_stamp = n_new atual)
-                # n_total e' o pivo da formula legada: n_old p/ SAIDA, n_new p/ ENTRADA.
+            if use_stamp:                                  # M2: symmetric stamp (n_stamp = current n_new)
+                # n_total is the pivot of the legacy formula: n_old for SAIDA, n_new for ENTRADA.
                 n_total = (n_stamp + 1) if event_type == "SAIDA" else n_stamp
             if DUAL_PULSE_N_CLIP and (n_total < int(DUAL_PULSE_MIN_RING_SIZE) or n_total > int(NUM_AGENTS)):
-                return   # estimativa de anel impossivel (corrompida) -> pula delta_D (ja marcado processed)
+                return   # impossible (corrupted) ring estimate -> skip delta_D (already marked processed)
             if event_type == "SAIDA":
                 n_old = n_total
                 n_new = n_old - 1
@@ -632,9 +636,9 @@ class DualPulseLayer(PropagationLayer):
             _busy_skip = (
                 DUAL_PULSE_ADD_IF_SETTLED
                 and abs(float(self.shift_remaining)) >= float(DUAL_PULSE_SETTLED_EPS)
-            )  # acumulacao condicional: δ_D chegou com o agente em movimento -> invalido
+            )  # conditional accumulation: delta_D arrived with the agent in motion -> invalid
             if math.isfinite(delta_d) and not self._churn_suppress and not _busy_skip:
-                # M5: sobrescreve (ultimo evento define) vs acumula (+=)
+                # M5: overwrite (last event wins) vs accumulate (+=)
                 self.shift_target = _safe(
                     float(delta_d) if DUAL_PULSE_IDEMPOTENT
                     else self.shift_target + float(delta_d)
