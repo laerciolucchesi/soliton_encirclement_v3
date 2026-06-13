@@ -96,8 +96,10 @@ documents a diagnosis (superseded as a result); **archived** = local archive
 | B2 flat tau ≈ 2.09–2.12 s to N=100 (TTL=3N, 2 seeds) | `largeN_results.csv` | canonical |
 | Speedup 9→149× (N=24→100); figure data | `figure_data.csv` | canonical |
 | Dimensionless law A ≈ 0.014·N²/tau_a; dt-invariance of tau (CV < 5%, dt 0.01–0.1) | `collapse_results.csv` | canonical |
-| Churn (current config, M8 on): overlay helps at all rates, adv 1.40/1.30/1.24/1.21 @ 6/12/24/48 per min (3 seeds, dt=0.01) | `churn_sweep_results.csv` (← Ciclo 1 Block B) | canonical |
-| Churn M8 ablation (M8 OFF, 8 seeds): adv 1.42/1.21/1.02/0.96 — shows M8 turns dense churn from slightly harmful (0.96) to helpful (1.21) | archived `churn_sweep_results_m8off_ablation8seed.csv` | ablation |
+| Churn (current config, M8+M-mult on, dt=0.05): overlay helps on ALL 8 seeds at all rates — PAIRED-by-seed adv_med 1.31/1.23/1.15/1.14 @ 6/12/24/48 per min, adv_min ≥ 1.11, n_lose=0 (8 seeds) | `churn_sweep_results.csv` (← Ciclo 3, 8-seed) | canonical |
+| Churn M8-on 3-seed dt=0.01 (Block B): adv 1.40/1.30/1.24/1.21 — historical (dt=0.01 magnitudes, before the 8-seed confirmation) | archived `churn_sweep_results_m8on_3seed_dt01_blockB.csv` | historical |
+| Churn M8 ablation (M8 OFF, 8 seeds, dt=0.01): adv 1.42/1.21/1.02/0.96 — shows M8 turns dense churn from slightly harmful (0.96) to helpful (1.21) | archived `churn_sweep_results_m8off_ablation8seed.csv` | ablation |
+| NOTE on churn worst-case: use the PAIRED per-seed advantage (baseline and B2 share the seed = same Poisson stream); an unpaired best-baseline/worst-B2 bound mixes streams and is misleadingly pessimistic | run_churn_sweep summary (adv_med/adv_min/n_lose) | methodology |
 | **M8 also fixes comm DELAY** (control: delay 0.1/dt 0.01/B2 → M8 OFF egap 0.109 broken, M8 ON egap 4e-5 settled). M8 = general consume_motion correctness fix (maneuver+churn+delay) | `comm_results_c1Dctrl_m8off.csv` + `comm_results_c1D_*.csv` | canonical (Ciclo 1) |
 | dt=0.05 validation: τ dt-invariant; regime jitter dt-invariant (late_std 2.5e-4 both dt, clean budget); churn still helps; delay graceful | `collapse_results_c1A_*.csv`, `collapse_results_c1Along_*.csv`, `churn_sweep_results_c1C_dt05.csv` | canonical (Ciclo 1) |
 | dt=0.05 LOSS caveat: FD timeout is tick-denominated — 5·dt (0.25 s) fails under loss 0.2 for BOTH methods; 20·dt (1.0 s) fixes it | `comm_results_c1E_dt05_tmo5t.csv`, `comm_results_c1E_dt05_tmo20t.csv` | canonical (Ciclo 1) |

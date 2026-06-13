@@ -401,5 +401,37 @@ Evidence: `churn_sweep_results_c2mmult_churn.csv` (M-mult-on churn sentinel);
 the adjacent-block benchmark is in diag_churn output (det c2repro/c2mmult, not
 persisted as a CSV — diag_churn prints). Open item: dead-canonical ENTRADA
 (~3/24 dense) still uncovered (would need a successor fallback) — deferred to a
-future cycle. Next research front options: that ENTRADA fallback; an 8-seed
-M8-on churn confirmation; or hardware/SITL (Cap. 8).
+future cycle (user 2026-06-13: not worth the cost/risk).
+
+## 2026-06-13 — 8-seed confirmation of the M8-on churn reference (user-requested)
+Goal: bump the M8-on churn reference from 3 seeds to 8 seeds and report the
+WORST case, not just the median. Run at the new default config (dt=0.05, M8 on,
+M-mult on), rates 6/12/24/48, seeds 0–7 (`churn_sweep_results_c3_churn8_dt05.csv`).
+
+**Methodology fix (lesson):** the per-rate summary's old `adv_worst` column
+(best-baseline-seed / worst-B2-seed) is MISLEADING for stochastic churn — it
+pairs DIFFERENT failure streams. Since baseline and B2 share EXPERIMENT_SEED
+(= same Poisson stream), the honest metric is the PAIRED per-seed advantage
+egap_base(s)/egap_B2(s). Fixed `run_churn_sweep.py` to report paired
+adv_med / adv_min / n_lose.
+
+**Result (paired by seed, 8 seeds):**
+| rate | adv_med | adv_min | adv_max | seeds lost | help |
+|---|---|---|---|---|---|
+| 6  | 1.31 | 1.24 | 1.34 | 0 | 8/8 |
+| 12 | 1.23 | 1.14 | 1.30 | 0 | 8/8 |
+| 24 | 1.15 | 1.11 | 1.20 | 0 | 8/8 |
+| 48 | 1.14 | 1.11 | 1.18 | 0 | 8/8 |
+
+**The overlay helps on EVERY one of the 8 seeds at EVERY rate** (adv_min ≥ 1.11;
+zero seeds where it loses). The unpaired "worst-case < 1" that appeared first
+(0.66–0.92) was purely a seed-mismatch artifact (some Poisson streams are
+intrinsically harder — high CV 23%@rate6 — but the overlay beats baseline on
+each given stream). Magnitudes are the dt=0.05 values (slightly below Block B's
+dt=0.01 1.40/1.30/1.24/1.21 — the tick-denominated detection latency), and
+robust across 8 seeds. **CONFIRMED.** Promote `churn_sweep_results.csv` to the
+8-seed dt=0.05 reference; keep the 3-seed dt=0.01 Block B as historical.
+Effort cost re-confirmed ~2.2–2.7× baseline actuation (logged trade-off).
+
+Next research front options (none chosen yet): dead-canonical ENTRADA fallback
+(deferred); hardware/SITL (Cap. 8); larger-N robustness.

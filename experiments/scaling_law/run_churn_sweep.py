@@ -21,7 +21,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from metrics_util import aggregate_seeds, effort_metrics  # noqa: E402
+from metrics_util import effort_metrics  # noqa: E402
 
 EXP_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(os.path.dirname(EXP_DIR))
@@ -127,21 +127,28 @@ def main():
     df = pd.DataFrame(list(store.values()))
     if df.empty:
         print("\nSem resultados."); return
-    print("\n=== egap_avg por taxa: mediana E pior caso entre seeds; vantagem = baseline/B2 ===")
-    print(f"{'rate/min':>9} {'inter(s)':>8} {'egap_base':>10} {'egap_B2':>9} {'vantagem':>9} "
-          f"{'B2_worst':>9} {'adv_worst':>9} {'eff_B2/bs':>9}")
+    print("\n=== egap_avg por taxa; vantagem PAREADA por seed (mesmo fluxo de falhas) ===")
+    print(f"{'rate/min':>9} {'inter(s)':>8} {'egap_base':>10} {'egap_B2':>9} {'adv_med':>8} "
+          f"{'adv_min':>8} {'n_lose':>7} {'eff_B2/bs':>9}")
     for rate in sorted(df.rate_total.unique()):
         b = df[(df.method == "baseline") & (df.rate_total == rate)]
         o = df[(df.method == "B2") & (df.rate_total == rate)]
-        ab = aggregate_seeds(b["egap_avg"].tolist())
-        ao = aggregate_seeds(o["egap_avg"].tolist())
-        eb, eo = ab["median"], ao["median"]
-        adv = (eb / eo) if (np.isfinite(eb) and np.isfinite(eo) and eo > 0) else float("nan")
-        # Worst-case advantage: the baseline's BEST seed vs the overlay's WORST —
-        # the conservative bound the campaign requires (not just central tendency).
-        b_best = float(np.nanmin(b["egap_avg"])) if len(b) else float("nan")
-        adv_worst = (b_best / ao["worst"]) if (np.isfinite(b_best) and np.isfinite(ao["worst"])
-                                               and ao["worst"] > 0) else float("nan")
+        eb = float(b["egap_avg"].median()) if len(b) else float("nan")
+        eo = float(o["egap_avg"].median()) if len(o) else float("nan")
+        # PAIRED advantage: baseline and B2 share the seed (= same Poisson failure
+        # stream), so compare WITHIN a seed. The min over seeds is the honest
+        # worst case; an unpaired best-baseline/worst-B2 bound mixes streams and is
+        # misleadingly pessimistic for stochastic churn. n_lose = seeds where the
+        # overlay is >5% worse than baseline on the SAME stream.
+        paired = []
+        for s in sorted(set(b["seed"]).intersection(set(o["seed"]))):
+            eb_s = float(b[b["seed"] == s]["egap_avg"].iloc[0])
+            eo_s = float(o[o["seed"] == s]["egap_avg"].iloc[0])
+            if np.isfinite(eb_s) and np.isfinite(eo_s) and eo_s > 0:
+                paired.append(eb_s / eo_s)
+        adv_med = float(np.median(paired)) if paired else float("nan")
+        adv_min = float(np.min(paired)) if paired else float("nan")
+        n_lose = int(sum(1 for a in paired if a < 0.95))
         eff_ratio = float("nan")
         if "effort_mean_v2" in df.columns:
             eb_eff = float(b["effort_mean_v2"].median()) if len(b) else float("nan")
@@ -149,11 +156,11 @@ def main():
             if np.isfinite(eb_eff) and eb_eff > 0 and np.isfinite(eo_eff):
                 eff_ratio = eo_eff / eb_eff
         inter = 60.0 / rate if rate > 0 else float("inf")
-        print(f"{rate:>9g} {inter:>8.2f} {eb:>10.4f} {eo:>9.4f} {adv:>9.2f} "
-              f"{ao['worst']:>9.4f} {adv_worst:>9.2f} {eff_ratio:>9.2f}")
+        print(f"{rate:>9g} {inter:>8.2f} {eb:>10.4f} {eo:>9.4f} {adv_med:>8.2f} "
+              f"{adv_min:>8.2f} {n_lose:>7} {eff_ratio:>9.2f}")
     print(f"\nWrote {RESULTS_CSV}")
-    print("Leitura: vantagem>1 = overlay ajuda; ~1 = empata (denso). adv_worst = limite conservador "
-          "(melhor seed do baseline vs pior do B2). eff_B2/bs > 1 = overlay gasta mais atuacao.")
+    print("Leitura: adv PAREADA (mesmo seed). adv_med>1 = overlay ajuda; adv_min = pior seed; "
+          "n_lose>0 = overlay perde em algum fluxo. eff_B2/bs > 1 = overlay gasta mais atuacao.")
 
 
 if __name__ == "__main__":
