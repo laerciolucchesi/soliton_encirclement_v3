@@ -435,3 +435,39 @@ Effort cost re-confirmed ~2.2–2.7× baseline actuation (logged trade-off).
 
 Next research front options (none chosen yet): dead-canonical ENTRADA fallback
 (deferred); hardware/SITL (Cap. 8); larger-N robustness.
+
+## 2026-06-13 — Stale / out-of-order messages (front 2): diagnosis = already handled
+Question for Cap. 7: is the overlay robust to STALE messages — i.e., an
+AgentState carrying state OLDER than one already processed from the same sender
+(reordering / out-of-order delivery), as opposed to LOSS (never arrives) or
+uniform DELAY (all arrive late, characterized in §7.2.3)?
+
+Diagnosis (read of handle_packet, protocol_agent.py): the neighbor cache is
+guarded by a PER-SENDER sequence number. For a LIVE sender, a message is
+accepted only if `seq > last_seq`; an older/equal seq is dropped. So:
+- out-of-order (old after new) → the old message is REJECTED, fresh state kept;
+- duplicate → dropped;
+- `rxtime` updates only on ACCEPTED messages → liveness tracks the freshest;
+- this guards the OVERLAY too: pulses ride in `prop_state` and the cancelling-
+  bias `dp_shift` is an AgentState field, so stale overlay inputs are dropped
+  before reaching the dual_pulse layer.
+The only "stale" that reaches the controller is therefore uniform DELAY (the
+freshest-available state is `delay` seconds old) — the axis already studied.
+Residual nuance: after a sender EXPIRES, an old message is accepted (rxtime=now)
+to re-acquire a recovered neighbor whose seq may have reset — so the cache can
+briefly hold ~one broadcast-period-old state; negligible and bounded.
+
+Action: extracted the decision into the pure helper
+`AgentProtocol._accept_neighbor_state(seq, last_seq, expired)` (behavior-
+preserving, de Morgan of the original guard) and locked it with
+`tests/test_stale_messages.py` (7 tests: fresh accepted; stale/reordered
+rejected when live; duplicate rejected; accepted after expiry; first-from-unseen;
+monotonicity property). Suite 145→152.
+
+**Verdict:** robustness to out-of-order delivery is a property of the per-sender
+sequence guard — now TESTED. No reordering-medium sim is needed (GrADyS delivers
+in order anyway; a custom reordering medium is optional future work if a
+referee wants an end-to-end demonstration). Cap. 7 can state: "the per-sender
+sequence numbers make the neighbor cache (and thus the overlay inputs) robust to
+out-of-order delivery; the residual staleness equals the communication delay,
+characterized in §7.2.3." Front 2 CLOSED (positive, cheap).

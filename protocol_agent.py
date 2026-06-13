@@ -445,6 +445,24 @@ class AgentProtocol(IProtocol):
         entrada = bool(succ_changed) and old_succ_alive
         return saida, entrada
 
+    @staticmethod
+    def _accept_neighbor_state(seq: int, last_seq: int, neighbor_expired: bool) -> bool:
+        """Decide whether to accept an incoming AgentState from a sender.
+
+        Accept only if the message is FRESHER than the last one seen from that
+        sender (seq > last_seq), OR the sender had expired (liveness timeout).
+        Rejecting seq <= last_seq for a LIVE sender is what makes the neighbor
+        cache robust to out-of-order / stale delivery: an old message arriving
+        after a newer one (reordering) cannot overwrite fresh state, and exact
+        duplicates are dropped. The expired exception lets a recovered neighbor
+        (whose seq counter may have reset) be re-acquired.
+
+        This guards the overlay too: dual_pulse pulses ride in prop_state and
+        the cancelling-bias dp_shift is an AgentState field, so stale overlay
+        inputs are dropped here before reaching the layer.
+        """
+        return (int(seq) > int(last_seq)) or bool(neighbor_expired)
+
     def _prune_expired_states(self, now: float) -> None:
         """Drop expired cached states to prevent unbounded growth."""
         if not PRUNE_EXPIRED_STATES:
@@ -1434,7 +1452,7 @@ class AgentProtocol(IProtocol):
                 _, last_rxtime = prev_entry
                 agent_expired = (now - last_rxtime) > AGENT_STATE_TIMEOUT
 
-            if state.seq <= last_seq and not agent_expired:
+            if not self._accept_neighbor_state(state.seq, last_seq, agent_expired):
                 return
 
             self.last_seq_agent[state.agent_id] = state.seq
