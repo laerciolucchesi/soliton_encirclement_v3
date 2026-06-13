@@ -41,6 +41,8 @@ TAU = float(os.environ.get("TRACKC_TAU", "1.0"))
 BUDGET = float(os.environ.get("TRACKC_BUDGET", "100"))
 T0 = 5.0
 VMAX = float(os.environ.get("VM_MAX_SPEED_XY", "10.0"))  # p/ effort/saturacao (M5/M6)
+DT = float(os.environ.get("CONTROL_PERIOD", "0.05"))     # pinned in child (label==reality)
+FD_ROBUST = max(20.0 * DT, 0.2)                          # loss-robust FD timeout (~20 ticks)
 
 
 def victim_node_id(n, seed=0):
@@ -75,7 +77,7 @@ def scenario_env(scenario, n, seed):
         e.update({"DETERMINISTIC_FAILURE_ENABLE": "True",
                   "DETERMINISTIC_FAILURE_AGENT_ID": str(victim_node_id(n, seed)),
                   "DETERMINISTIC_FAILURE_TIME_T0": str(T0), "DETERMINISTIC_FAILURE_OFF_TIME": "-1.0",
-                  "COMMUNICATION_FAILURE_RATE": "0.1", "AGENT_STATE_TIMEOUT": "0.2"})  # fix A ligado
+                  "COMMUNICATION_FAILURE_RATE": "0.1", "AGENT_STATE_TIMEOUT": f"{FD_ROBUST:g}"})  # fix A ligado
         has_event = True
     elif scenario == "delay":
         e.update({"DETERMINISTIC_FAILURE_ENABLE": "True",
@@ -101,7 +103,7 @@ def scenario_env(scenario, n, seed):
         # TUDO junto: churn medio-denso + perda (com FD-fix) + atraso ABAIXO do onset (5*dt) + M8.
         e.update({"FAILURE_ENABLE": "True", "FAILURE_MEAN_FAILURES_PER_MIN": f"{18.0 / n:.6f}",
                   "FAILURE_OFF_TIME": "8.0", "DUAL_PULSE_GATE_ENABLE": "False",
-                  "COMMUNICATION_FAILURE_RATE": "0.1", "AGENT_STATE_TIMEOUT": "0.2",
+                  "COMMUNICATION_FAILURE_RATE": "0.1", "AGENT_STATE_TIMEOUT": f"{FD_ROBUST:g}",
                   "COMMUNICATION_DELAY": "0.02"})
     return e, has_event
 
@@ -135,6 +137,7 @@ def run_cell(method, scenario, motion, seed):
     env.update({
         "PYTHONIOENCODING": "utf-8", "PROPAGATION_METHOD": method, "PROPAGATION_K_PROP": "0.0",
         "NUM_AGENTS": str(N), "SIM_DURATION": str(T0 + BUDGET), "K_E_TAU": f"{250.0 / N:.6f}",
+        "CONTROL_PERIOD": f"{DT:g}", "AGENT_STATE_TIMEOUT": f"{5.0 * DT:g}",  # loss-free default; loss/stress override below
         "VM_TAU_XY": str(TAU), "INIT_ANGLES_EQUIDISTANT": "True", "INIT_RADIUS_RANGE": "0.0",
         "EXPERIMENT_SEED": str(seed), "VIS_OPEN_BROWSER": "False", "SKIP_TELEMETRY_PLOTS": "True",
         "RUNS_SUMMARY_CSV_PATH": os.path.join(run_dir, "runs_summary.csv"),

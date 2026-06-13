@@ -1,0 +1,2 @@
+tau_fit,tau_fit_r2,egap_final,egap_late_std,settled,effort_mean_v2,sat_frac,fairness_p95,method,N,tau_xy,loss,delay,repeats,seed,agent_state_timeout
+,0.0002906962403472768,0.1087021925856566,1.8369573584741642e-06,False,5.930515409184451e-05,0.0,0.27794949056609924,B2,24,1.0,0.0,0.1,2,0,0.2

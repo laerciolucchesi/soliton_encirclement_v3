@@ -49,11 +49,13 @@ METHODS = [m.strip() for m in os.environ.get("COMM_METHODS", "baseline,dual_puls
 SEEDS = [int(x) for x in os.environ.get("COMM_SEEDS", "0,1,2").split(",") if x.strip()]
 BUDGET = float(os.environ.get("COMM_BUDGET", "150"))
 GAIN_PRODUCT = float(os.environ.get("GAIN_PRODUCT", "250"))
-DT = 0.01
-# FD-fix (Track A): failure-detector timeout robust to packet loss. 20*dt covers
-# loss up to ~0.4 (0.4^20 ~ 1e-8 false-positive odds per window) vs the project
-# default 5*dt which is exactly the pre-fix vulnerable setting.
-FD_TIMEOUT = float(os.environ.get("COMM_FD_TIMEOUT", str(20 * DT)))
+DT = float(os.environ.get("CONTROL_PERIOD", "0.05"))   # pinned in child (label==reality)
+# FD-fix (Track A): failure-detector timeout robust to packet loss. The tolerance
+# is TICK-denominated -- 20 ticks covers loss up to ~0.4 (0.4^20 ~ 1e-8 false-positive
+# odds per window). So scale with dt: max(20*dt, 0.2) = 0.2 s at dt=0.01, 1.0 s at
+# dt=0.05. The project's bare default 5*dt is the pre-fix vulnerable setting (Ciclo 1
+# Block E showed 5 ticks breaks the detector under loss 0.2 for both methods).
+FD_TIMEOUT = float(os.environ.get("COMM_FD_TIMEOUT", str(max(20 * DT, 0.2))))
 T0 = 5.0
 TAIL_FLOOR_FRAC = 0.05
 LATE_WIN = 20.0
@@ -104,7 +106,7 @@ def run_cell(method, loss, seed, repeats):
         "NUM_AGENTS": str(N), "SIM_DURATION": str(T0 + BUDGET), "K_E_TAU": f"{k_e_tau:.6f}",
         "VM_TAU_XY": str(TAU), "EXPERIMENT_SEED": str(seed),
         "COMMUNICATION_FAILURE_RATE": f"{loss:g}", "COMMUNICATION_DELAY": f"{DELAY:g}",
-        "AGENT_STATE_TIMEOUT": f"{FD_TIMEOUT:g}",
+        "CONTROL_PERIOD": f"{DT:g}", "AGENT_STATE_TIMEOUT": f"{FD_TIMEOUT:g}",
         "INIT_ANGLES_EQUIDISTANT": "True", "INIT_RADIUS_RANGE": "0.0", "TARGET_MOTION_SPEED_XY": "0.0",
         "VIS_OPEN_BROWSER": "False", "SKIP_TELEMETRY_PLOTS": "True",
         "DETERMINISTIC_FAILURE_ENABLE": "True", "DETERMINISTIC_FAILURE_AGENT_ID": str(victim),

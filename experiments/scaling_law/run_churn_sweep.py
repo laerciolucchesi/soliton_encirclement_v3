@@ -41,6 +41,7 @@ METHODS = [m.strip() for m in os.environ.get("CHURN_METHODS", "baseline,dual_pul
 T0 = 5.0
 WARMUP_AVG = 15.0  # ignora o transiente inicial no egap_avg
 VMAX = float(os.environ.get("VM_MAX_SPEED_XY", "10.0"))  # p/ effort/saturacao (M5/M6)
+DT = float(os.environ.get("CONTROL_PERIOD", "0.05"))     # pinned in child (label==reality)
 
 
 def metrics_from_tgt(tgt):
@@ -67,6 +68,7 @@ def run_cell(method, rate_total, seed):
     env.update({
         "PYTHONIOENCODING": "utf-8", "PROPAGATION_METHOD": method, "PROPAGATION_K_PROP": "0.0",
         "NUM_AGENTS": str(N), "SIM_DURATION": str(T0 + BUDGET), "K_E_TAU": f"{250.0 / N:.6f}",
+        "CONTROL_PERIOD": f"{DT:g}", "AGENT_STATE_TIMEOUT": f"{5.0 * DT:g}",  # churn = real outages, loss=0 -> 5 ticks clean
         "VM_TAU_XY": str(TAU), "COMMUNICATION_FAILURE_RATE": "0", "COMMUNICATION_DELAY": "0",
         "INIT_ANGLES_EQUIDISTANT": "True", "INIT_RADIUS_RANGE": "0.0", "TARGET_MOTION_SPEED_XY": "0.0",
         "VIS_OPEN_BROWSER": "False", "SKIP_TELEMETRY_PLOTS": "True",

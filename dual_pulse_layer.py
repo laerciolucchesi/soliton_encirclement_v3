@@ -312,7 +312,8 @@ class DualPulseLayer(PropagationLayer):
             self.shift_target = min(0.0, self.shift_target - d)
             self.shift_remaining = min(0.0, self.shift_remaining - d)
 
-    def inject_pulse(self, originator_id: int, alive_count: Optional[int] = None) -> None:
+    def inject_pulse(self, originator_id: int, alive_count: Optional[int] = None,
+                     multiplicity: int = 1) -> None:
         """Inject CCW + CW pulses for a SAIDA event.
 
         Called by the protocol agent on the canonical side of the event
@@ -325,11 +326,21 @@ class DualPulseLayer(PropagationLayer):
         alive_count (M2): originator's alive count. Stamps n_stamp = alive_count+1
         (= n_old/n_total for SAIDA) on the pulse; receivers use it as the ring size when
         DUAL_PULSE_USE_STAMPED_N (instead of the hop-sum, which goes stale under churn).
+
+        multiplicity (M-mult, k): how many ADJACENT drones left in this event. For an
+        adjacent block only this one pulse fires (the others' predecessors are dead),
+        so it must redistribute a k-arc gap: receivers/originator use n_old = n_new + k.
+        k=1 is the legacy single-removal behavior. Inferred by the caller from its own
+        post-event succ_gap (neighbor-only).
         """
         try:
             oid = int(originator_id)
         except Exception:
             return
+        try:
+            k = max(1, int(multiplicity))
+        except Exception:
+            k = 1
         # SYMMETRIC STAMP (M2): n_stamp = current ring incl self = n_new = alive_count+1, SAME for
         # SAIDA and ENTRADA (alive_count excludes self). The n_old (which differs by type) is derived
         # at the receiver from the stamped n_new.
@@ -346,6 +357,7 @@ class DualPulseLayer(PropagationLayer):
                 "originator_id": oid,
                 "recovered_id": None,  # not used for SAIDA
                 "n_stamp": n_stamp,
+                "k": k,  # M-mult: adjacent-block multiplicity
             }
             self.pending_pulses_to_forward.append(
                 {"pulse": pulse, "remaining": int(self.BROADCAST_REPEATS)}
@@ -487,6 +499,10 @@ class DualPulseLayer(PropagationLayer):
         except Exception:
             n_stamp = None
         use_stamp = DUAL_PULSE_USE_STAMPED_N and n_stamp is not None   # M2
+        try:
+            k_mult = max(1, int(pulse.get("k", 1)))                    # M-mult adjacent-block multiplicity
+        except Exception:
+            k_mult = 1
 
         # Self-originated returning pulse: apply delta_orig once, do NOT forward.
         if event_id in self._self_originated:
@@ -505,8 +521,10 @@ class DualPulseLayer(PropagationLayer):
                     # attenuates the originator's self-shift accordingly.
                     alpha_hop = self._hop_alpha(distance_from_d=1.0, n_new=n_new)
                     if event_type == "SAIDA":
-                        # SAIDA: gap_old (with D) > gap_new (without D)
-                        n_old = n_new + 1
+                        # SAIDA: gap_old (with D) > gap_new (without D). M-mult: k
+                        # adjacent removals -> n_old = n_new + k (gap_old = pre-event
+                        # spacing); k=1 recovers the single-removal formula.
+                        n_old = n_new + k_mult
                         gap_old = 2.0 * math.pi / float(n_old)
                         gap_new = 2.0 * math.pi / float(n_new)
                         delta_orig = (
@@ -582,6 +600,7 @@ class DualPulseLayer(PropagationLayer):
                 "originator_id": pulse.get("originator_id", event_id[0]),
                 "recovered_id": recovered_id,
                 "n_stamp": n_stamp,                 # M2: propagate the size stamp
+                "k": k_mult,                        # M-mult: propagate the multiplicity
             }
             self.pending_pulses_to_forward.append(
                 {"pulse": forwarded, "remaining": int(self.BROADCAST_REPEATS)}
@@ -604,8 +623,10 @@ class DualPulseLayer(PropagationLayer):
             if DUAL_PULSE_N_CLIP and (n_total < int(DUAL_PULSE_MIN_RING_SIZE) or n_total > int(NUM_AGENTS)):
                 return   # impossible (corrupted) ring estimate -> skip delta_D (already marked processed)
             if event_type == "SAIDA":
-                n_old = n_total
-                n_new = n_old - 1
+                # M-mult: the alive ring is n_new = hop-sum - 1; with k adjacent
+                # removals the pre-event ring was n_old = n_new + k (k=1 => legacy).
+                n_new = n_total - 1
+                n_old = n_new + k_mult
                 if n_new < int(DUAL_PULSE_MIN_RING_SIZE):
                     return
                 gap_old = 2.0 * math.pi / float(n_old)

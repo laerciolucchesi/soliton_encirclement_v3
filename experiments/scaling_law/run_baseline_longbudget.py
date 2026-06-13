@@ -30,6 +30,7 @@ RESULTS = os.path.join(EXP_DIR, "baseline_long_results.csv")
 
 T0 = 5.0
 GAIN_PRODUCT = 250.0
+DT = float(os.environ.get("CONTROL_PERIOD", "0.05"))  # pinned in child (label==reality); tau is dt-invariant
 TAU50 = 85.35  # measured baseline tau at N=50 (stable gain)
 TAIL_FLOOR_FRAC = 0.05
 LATE_WIN = 20.0
@@ -87,6 +88,8 @@ def run(n):
         "PROPAGATION_METHOD": "baseline",
         "NUM_AGENTS": str(n),
         "SIM_DURATION": str(T0 + b),
+        "CONTROL_PERIOD": f"{DT:g}",
+        "AGENT_STATE_TIMEOUT": f"{5.0 * DT:g}",   # loss-free single fault -> fast clean detection
         "K_E_TAU": f"{k:.6f}",
         "VIS_OPEN_BROWSER": "False",
         "SKIP_TELEMETRY_PLOTS": "True",

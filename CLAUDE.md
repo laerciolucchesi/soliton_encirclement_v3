@@ -256,8 +256,15 @@ fails between detection and injection, the event is lost — accepted in v1.
   dt=0.01; tick-denominated, so the physical ramp scales with dt).
 - `DUAL_PULSE_CONSUME_FF_ONLY=True` (M8) — `consume_motion` deducts only the
   FF-commanded rotation (previous tick), not the full measured Δθ; prevents
-  target-tracking rotation from eating the shift under maneuvers. Active
-  only in B/B2.
+  target-tracking rotation from eating the shift under maneuvers (and, as
+  Ciclo 1 found, under comm delay and dense churn). Active only in B/B2.
+- `DUAL_PULSE_MULTIPLICITY=True` (M-mult) — the SAIDA originator infers the
+  adjacent-death multiplicity k from its own post-event `succ_gap`
+  (≈(k+1)·ideal_gap, neighbor-only) and the δ formula uses `n_old = n_new + k`.
+  Fixes the magnitude under-correction when ADJACENT drones fail together
+  (only one pulse fires, but must redistribute a k-arc gap). k=1 is byte-
+  identical to the legacy single-removal behavior. `DUAL_PULSE_MAX_MULTIPLICITY`
+  (6) clamps the inferred k against noisy gaps.
 - `DUAL_PULSE_ALPHA_CLOSE_RATIO=0.7` — attenuation at the immediate
   neighbours of D (1.0 = no attenuation).
 - `DUAL_PULSE_ALPHA_CURVE_POWER=1.0` — interpolation exponent for the

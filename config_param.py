@@ -15,16 +15,23 @@ import os as _os
 # 1) Simulation framework (timing + simulator timers)
 # --------------------------------------------------------------------------------------
 
-# Base control loop period (seconds) for the "muscular" u controller.
-# env-overridable (dt / control-period study, Phase 2 — dimensionless collapse). A single
+# Base control loop period (seconds) for the "muscular" u controller. A single
 # `dt` drives the control loop, the state-broadcast periods (below) AND the mobility
-# update (VM_UPDATE_RATE, tied to it in section 3). Default 0.01 keeps all prior runs identical.
+# update (VM_UPDATE_RATE, tied to it in section 3). Env-overridable.
+#
+# Default changed 0.01 -> 0.05 (campaign Ciclo 1, 2026-06): the relaxation times
+# are dt-invariant in SECONDS (measured CV < 5% over dt 0.01..0.1) and the B2
+# regime jitter is likewise dt-invariant, so 0.05 gives ~5x faster simulations
+# (5x fewer ticks/s) with no qualitative change to any conclusion. Set
+# CONTROL_PERIOD=0.01 for higher-fidelity / legacy-comparison runs. NOTE: at the
+# coarser dt the failure-detector timeout must stay >= ~20 ticks for loss
+# robustness -- AGENT_STATE_TIMEOUT's default handles this (see section 6).
 try:
-    CONTROL_PERIOD: float = float(_os.environ.get("CONTROL_PERIOD", "0.01"))
+    CONTROL_PERIOD: float = float(_os.environ.get("CONTROL_PERIOD", "0.05"))
 except ValueError:
-    CONTROL_PERIOD = 0.01
+    CONTROL_PERIOD = 0.05
 if CONTROL_PERIOD <= 0.0:
-    CONTROL_PERIOD = 0.01
+    CONTROL_PERIOD = 0.05
 
 # TargetState broadcast period (seconds). Keep equal to control loop by default.
 TARGET_STATE_BROADCAST_PERIOD: float = CONTROL_PERIOD
@@ -229,13 +236,25 @@ except ValueError:
 # Protocol liveness / neighbor selection tuning
 # Note: these values are local (not transmitted) and are expressed in seconds/radians.
 # Timeout guards are scaled with CONTROL_PERIOD.
-# AgentState liveness timeout (s). Default 5*dt; env-overridable (Phase 3). A failure detector
-# under packet loss needs a timeout >> (consecutive losses)*broadcast_period, otherwise live
-# neighbors "flicker" as dead (storm of false SAIDA/ENTRADA). Scale with the loss rate.
+# AgentState liveness timeout (s). Env-overridable (Phase 3). A failure detector
+# under packet loss needs a timeout that tolerates several CONSECUTIVE losses,
+# otherwise live neighbors "flicker" dead (storm of false SAIDA/ENTRADA). The
+# tolerance is TICK-denominated: P(false positive window) ~ loss_rate^(timeout/dt),
+# so what matters is the number of broadcast periods covered, not absolute seconds.
+#
+# Default changed 5*dt -> max(20*dt, 0.2) (campaign Ciclo 1, 2026-06): ~20 ticks
+# covers loss up to ~0.4 (0.4^20 ~ 1e-8). This equals 0.2 s at dt=0.01 (the
+# campaign's validated FD-fix) and 1.0 s at the new default dt=0.05, where the
+# old 5*dt=0.25 s (= only 5 ticks) was measured to break the detector under loss
+# 0.2 for BOTH baseline and overlay (Ciclo 1 Block E). Trade-off: a real dead
+# node is declared dead after this timeout, so larger dt buys loss-robustness at
+# the cost of detection latency (a ~1 s additive offset to recovery at dt=0.05,
+# separate from the dt-invariant relaxation time). Loss-free experiments may
+# override to a shorter value for tighter settling measurements.
 try:
     AGENT_STATE_TIMEOUT: float = float(_os.environ["AGENT_STATE_TIMEOUT"])
 except (KeyError, ValueError):
-    AGENT_STATE_TIMEOUT = 5.0 * CONTROL_PERIOD       # AgentState liveness timeout (s)
+    AGENT_STATE_TIMEOUT = max(20.0 * CONTROL_PERIOD, 0.2)   # AgentState liveness timeout (s)
 TARGET_STATE_TIMEOUT: float = 10.0 * CONTROL_PERIOD  # TargetState liveness timeout (s)
 HYSTERESIS_RAD: float = 0.05                         # Neighbor switching hysteresis (rad)
 
@@ -483,6 +502,35 @@ try:
     DUAL_PULSE_TTL_HOPS: int = int(_os.environ.get("DUAL_PULSE_TTL_HOPS", str(max(50, 3 * NUM_AGENTS))))
 except ValueError:
     DUAL_PULSE_TTL_HOPS = max(50, 3 * NUM_AGENTS)
+
+# DUAL_PULSE_MULTIPLICITY (M-mult, campaign Ciclo 2): repair the MAGNITUDE
+# under-correction when ADJACENT drones fail simultaneously. Only ONE pulse fires
+# in that case (the predecessor of the FIRST dead drone survives; the others'
+# predecessors are themselves dead), and it reads the correct alive ring size
+# N_new via hop-count, but the delta formula assumes a SINGLE removal
+# (n_old = n_new + 1) -> it delivers ~1/k of the needed shift -> the slow baseline
+# cleans the rest (measured tau 13.6/15.5 s for adj2/adj3 vs ~2 s).
+# With this flag the surviving originator infers the death multiplicity k from its
+# OWN post-event succ_gap (~(k+1)*ideal_gap, since k frozen dead drones lie between
+# it and its new successor -- NEIGHBOR-ONLY) and stamps k on the pulse; receivers
+# and the originator self-shift then use n_old = n_new + k. Reduces EXACTLY to the
+# legacy behavior at k=1 (single / non-adjacent failures).
+# DEFAULT ON (campaign Ciclo 2, validated): fixes adjacent-block sub-correction
+# (adj2/adj3 tau 13.6/15.5 -> 2.2 s, ~6-7x) with ZERO regression elsewhere
+# (single/non-adjacent byte-identical at k=1; churn identical/slightly better --
+# the k>1 path only engages on a genuine adjacent block). Disable via env for the
+# ablation. See docs/experiments/CAMPAIGN_LOG.md (Ciclo 2).
+DUAL_PULSE_MULTIPLICITY: bool = (
+    _os.environ.get("DUAL_PULSE_MULTIPLICITY", "True").strip().lower() in ("true", "1", "yes", "y")
+)
+# Safety clamp on the inferred k: an implausibly large block is measurement noise
+# (non-uniform pre-event spacing), so cap it and fall back toward k=1.
+try:
+    DUAL_PULSE_MAX_MULTIPLICITY: int = int(_os.environ.get("DUAL_PULSE_MAX_MULTIPLICITY", "6"))
+except ValueError:
+    DUAL_PULSE_MAX_MULTIPLICITY = 6
+if DUAL_PULSE_MAX_MULTIPLICITY < 1:
+    DUAL_PULSE_MAX_MULTIPLICITY = 1
 
 # DUAL_PULSE_GAP_CLIP_FRAC: shift_remaining is clipped so that virtual gaps stay
 # positive with margin. Value is fraction of the smaller real gap.

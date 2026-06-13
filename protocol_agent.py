@@ -69,6 +69,8 @@ from config_param import (
     DUAL_PULSE_GATE_WINDOW,
     DUAL_PULSE_GATE_MAX_EVENTS,
     DUAL_PULSE_CONSUME_FF_ONLY,
+    DUAL_PULSE_MULTIPLICITY,
+    DUAL_PULSE_MAX_MULTIPLICITY,
     )
 
 
@@ -1200,8 +1202,17 @@ class AgentProtocol(IProtocol):
                 ):
                     if saida:
                         # N for delta_D comes from the HOP-SUM (neighbor-only), not from a global count.
+                        # M-mult: infer the adjacent-death multiplicity k from this agent's OWN
+                        # post-event succ_gap (~(k+1)*ideal_gap; neighbor-only). k=1 = single/non-adjacent.
+                        k_mult = 1
+                        if DUAL_PULSE_MULTIPLICITY:
+                            dgap = self._compute_desired_gap_self()
+                            if dgap > 1e-9 and math.isfinite(succ_gap):
+                                k_mult = int(round(float(succ_gap) / float(dgap))) - 1
+                                k_mult = max(1, min(k_mult, int(DUAL_PULSE_MAX_MULTIPLICITY)))
                         self.dual_pulse_layer.inject_pulse(
                             originator_id=int(self.node_id),
+                            multiplicity=k_mult,
                         )
                     elif entrada and self.neighbor_succ_id is not None:
                         # The new succ IS the recovered drone (it just appeared

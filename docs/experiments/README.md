@@ -31,6 +31,7 @@ DUAL_PULSE_T_FF        = VM_TAU_XY   # T_FF = tau_a rule (c_FF = 1.0)
 DUAL_PULSE_TTL_HOPS    = max(50, 3N) # must be >= N or coverage truncates
 K_E_TAU                = 250 / N     # stable normalized gain (fixed gain destabilizes N >~ 40)
 DUAL_PULSE_CONSUME_FF_ONLY = True    # M8: consume only the FF-commanded rotation
+DUAL_PULSE_MULTIPLICITY    = True    # M-mult: k-aware δ for adjacent-block failures (k=1 ≡ legacy)
 Trigger: neighbor-only (succ-freshness classification; no global alive_count)
 ```
 
@@ -95,12 +96,16 @@ documents a diagnosis (superseded as a result); **archived** = local archive
 | B2 flat tau ≈ 2.09–2.12 s to N=100 (TTL=3N, 2 seeds) | `largeN_results.csv` | canonical |
 | Speedup 9→149× (N=24→100); figure data | `figure_data.csv` | canonical |
 | Dimensionless law A ≈ 0.014·N²/tau_a; dt-invariance of tau (CV < 5%, dt 0.01–0.1) | `collapse_results.csv` | canonical |
-| Churn: overlay helps sparse/moderate, neutral dense (adv 1.42/1.21/1.02/0.96 @ 6/12/24/48 per min, 8 seeds, neighbor-only trigger) | `churn_sweep_results.csv` (promoted from `_add_clean8`) | canonical for H7 — **provenance: M8 OFF** (predates the M8 default). Current code (M8 on) performs BETTER (verified: rate12/seed0 B2 egap 0.0751 vs 0.1442 M8-off); a fresh M8-on churn reference is generated in Ciclo 1 |
+| Churn (current config, M8 on): overlay helps at all rates, adv 1.40/1.30/1.24/1.21 @ 6/12/24/48 per min (3 seeds, dt=0.01) | `churn_sweep_results.csv` (← Ciclo 1 Block B) | canonical |
+| Churn M8 ablation (M8 OFF, 8 seeds): adv 1.42/1.21/1.02/0.96 — shows M8 turns dense churn from slightly harmful (0.96) to helpful (1.21) | archived `churn_sweep_results_m8off_ablation8seed.csv` | ablation |
+| **M8 also fixes comm DELAY** (control: delay 0.1/dt 0.01/B2 → M8 OFF egap 0.109 broken, M8 ON egap 4e-5 settled). M8 = general consume_motion correctness fix (maneuver+churn+delay) | `comm_results_c1Dctrl_m8off.csv` + `comm_results_c1D_*.csv` | canonical (Ciclo 1) |
+| dt=0.05 validation: τ dt-invariant; regime jitter dt-invariant (late_std 2.5e-4 both dt, clean budget); churn still helps; delay graceful | `collapse_results_c1A_*.csv`, `collapse_results_c1Along_*.csv`, `churn_sweep_results_c1C_dt05.csv` | canonical (Ciclo 1) |
+| dt=0.05 LOSS caveat: FD timeout is tick-denominated — 5·dt (0.25 s) fails under loss 0.2 for BOTH methods; 20·dt (1.0 s) fixes it | `comm_results_c1E_dt05_tmo5t.csv`, `comm_results_c1E_dt05_tmo20t.csv` | canonical (Ciclo 1) |
 | Churn pre-trigger-fix (adv 0.48 disaster at 12/min) — the refuted result | archived `churn_sweep_results_pre_trigger_fix.csv` | diagnostic |
 | Loss ≤ 0.4 settles with FD timeout 0.2 s (graceful fallback; speedup shrinks 0.1–0.2, inert at 0.4) | `comm_results_fix.csv`, `comm_results_loss_clean.csv` | canonical |
 | Loss vulnerability WITHOUT FD fix (B2 breaks at 0.1) — diagnosis artifact | `comm_results.csv` | diagnostic (pre-fix; do not cite as current behavior) |
 | repeats ≥ 2 amplifies FD false positives under loss | `comm_results_repeats.csv` | diagnostic |
-| Delay: degrades at 5·dt, breaks at 10·dt (egap 0.109, 3 seeds); not the FD timeout | `comm_results_delay.csv`, `comm_results_delay005c.csv`, `comm_results_delay010c.csv`, `comm_results_delaytmo.csv` | canonical (open limit) |
+| Delay (M8 OFF, historical): degrades at 5·dt, breaks at 10·dt (egap 0.109); mechanism = stale state, not FD timeout | `comm_results_delay*.csv`, `comm_results_delaytmo.csv` | **superseded** — the break was an M8-OFF artifact; see the M8-fixes-delay row above |
 | Moving target: M8 fixes maneuver (0.0485 ≤ baseline 0.0499); benefit preserved under constant motion | `trackC_results_m8clean.csv` | canonical |
 | Churn+motion (no gate): overlay helps (1.42/1.26 const; with M8 1.16–1.20 maneuver) | `trackC_results_churnclean.csv`, `trackC_results_churnm8.csv` | canonical |
 | Controlled ENTRADA (recovery) works: 1.88× | `trackC_results_recover.csv` | canonical |

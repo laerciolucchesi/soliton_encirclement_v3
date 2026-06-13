@@ -40,7 +40,7 @@ SEEDS = [int(x) for x in os.environ.get("COLLAPSE_SEEDS", "0").split(",") if x.s
 INIT_RADIUS = float(os.environ.get("COLLAPSE_INIT_RADIUS", "0.0"))   # scatter de raio p/ multi-seed
 C_FF = float(os.environ.get("COLLAPSE_C_FF", "1.0"))                 # T_FF = C_FF * tau_a
 GAIN_PRODUCT = float(os.environ.get("GAIN_PRODUCT", "250"))          # K_E_TAU = GAIN_PRODUCT / N
-DT = float(os.environ.get("CONTROL_PERIOD", "0.01"))                # control period (for Pe)
+DT = float(os.environ.get("CONTROL_PERIOD", "0.05"))                # control period (pinned in child; for Pe/budget)
 BUDGET_BASELINE = float(os.environ.get("COLLAPSE_BUDGET_BASELINE", "20"))   # floor
 BUDGET_B2 = float(os.environ.get("COLLAPSE_BUDGET_B2", "15"))               # floor
 T0 = float(os.environ.get("SCALING_T0", "5.0"))
@@ -62,8 +62,11 @@ def run_cell(method, n, tau_xy, seed):
     is_b2 = (method == "dual_pulse")
     k_e_tau = GAIN_PRODUCT / n
     t_ff = C_FF * tau_xy
-    # auto-escala a duracao a ~4x o tau esperado; baseline ~3.3*N^2*dt(s)~0.034*N^2(s); B2 ~2.3*T_FF.
-    budget = max(BUDGET_B2, 12.0 * t_ff) if is_b2 else max(BUDGET_BASELINE, 14.0 * n * n * DT)
+    # Auto-scale duration to ~4x the expected tau. Both are dt-INVARIANT in seconds
+    # (the relaxation time does not depend on the control period): baseline
+    # tau ~ 0.034*N^2 s -> budget ~0.14*N^2 s; B2 tau ~2.3*T_FF -> budget ~12*T_FF.
+    # (Was 14*N^2*DT, which over-budgeted ~5x at dt=0.05 and erased the dt speedup.)
+    budget = max(BUDGET_B2, 12.0 * t_ff) if is_b2 else max(BUDGET_BASELINE, 0.14 * n * n)
     victim = victim_node_id(n, seed)
     duration = T0 + budget
     run_dir = os.path.join(RUNS_DIR, f"{method}_N{n}_tau{tau_xy:g}_dt{DT:g}_s{seed}")
@@ -75,6 +78,8 @@ def run_cell(method, n, tau_xy, seed):
         "PROPAGATION_K_PROP": "0.0",
         "NUM_AGENTS": str(n),
         "SIM_DURATION": str(duration),
+        "CONTROL_PERIOD": f"{DT:g}",                  # pin dt (label==reality, independent of global default)
+        "AGENT_STATE_TIMEOUT": f"{5.0 * DT:g}",       # loss-free: 5 ticks = fast clean fault detection
         "K_E_TAU": f"{k_e_tau:.6f}",
         "VM_TAU_XY": str(tau_xy),
         "EXPERIMENT_SEED": str(seed),
