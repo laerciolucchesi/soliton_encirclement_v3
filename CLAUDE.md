@@ -440,15 +440,20 @@ header-less files.
 
 ## What's intentionally out of scope here
 
-- The thesis material and reference binaries have been **moved out of the
-  repository** to a sibling local archive (`../_soliton_v3_local_archive/`)
-  to keep the public repo lean. That archive holds: the Portuguese thesis
-  drafts (former `docs/` tree, `equacoes_controle_tangencial*.md`,
-  `Ideias relacionadas ao projeto soliton.md`), the MATLAB `.m`/`.mat`/`.mp4`
-  KdV reference material, `metrics.pptx`, and the orphaned figure/diagnostic
-  scripts (`plot_limiter_soft.py`, `diagnose_signs.py`). None of these are
-  used by the Python simulation. The control-law reference that stays public
-  is `CONTROLE.md`.
+- The **Portuguese PhD thesis material** lives in `docs/thesis/` (the index
+  `tese_estrutura.md`, the `draft/cap1..cap8` chapters, the `plano_*.md`
+  campaign plans, `pesquisa_literatura_encirclement.md`). This directory is
+  **gitignored** (`docs/thesis/` in `.gitignore`): visible and editable in the
+  IDE, but never committed or pushed — it stays out of the public repo while
+  the campaign keeps updating it. Backup = OneDrive (no git versioning).
+- Reference binaries and orphaned scratch scripts are in a sibling local
+  archive (`../_soliton_v3_local_archive/`): the MATLAB `.m`/`.mat`/`.mp4`
+  KdV material, `metrics.pptx`, the working notes (`equacoes_controle_*.md`,
+  `Ideias relacionadas ao projeto soliton.md`), the orphaned figure/diagnostic
+  scripts (`plot_limiter_soft.py`, `diagnose_signs.py`), and superseded
+  experiment-variant CSVs (`experiments_variants/`). None are used by the
+  Python simulation. The control-law reference that stays public is
+  `CONTROLE.md`; English campaign docs are in `docs/experiments/`.
 - The other 6 propagation methods (`advection`, `wave`, `excitable`,
   `kdv`, `alarm`, `burgers`) are kept in the codebase for completeness
   but are documented as **earlier failed attempts** by the user. The

@@ -6,8 +6,8 @@ definitions, the acceptance criteria, and the evidence index mapping each
 scientific claim to the CSV that supports it.
 
 The hypothesis-by-hypothesis history (including negative results) is in
-[CAMPAIGN_LOG.md](CAMPAIGN_LOG.md). Portuguese thesis prose lives outside
-this repository (local archive).
+[CAMPAIGN_LOG.md](CAMPAIGN_LOG.md). Portuguese thesis prose lives in
+`docs/thesis/` (gitignored — local/IDE only, not part of the public repo).
 
 ---
 

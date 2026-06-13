@@ -74,3 +74,7 @@ err.txt
 
 # --- Agent session directory ---
 .claude/
+
+# --- Portuguese PhD thesis material (kept local + OneDrive, excluded from the
+#     public repo). Visible/editable in the IDE but never committed/pushed. ---
+docs/thesis/
