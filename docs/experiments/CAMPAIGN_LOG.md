@@ -471,3 +471,32 @@ referee wants an end-to-end demonstration). Cap. 7 can state: "the per-sender
 sequence numbers make the neighbor cache (and thus the overlay inputs) robust to
 out-of-order delivery; the residual staleness equals the communication delay,
 characterized in §7.2.3." Front 2 CLOSED (positive, cheap).
+
+## 2026-06-13 — Anti-windup / limiter (front 4): diagnosis = no pathology, no limiter
+Question: the overlay's control effort is ~2× baseline under churn — is that a
+saturation/windup pathology that an anti-windup or command limiter should fix?
+
+Diagnosis (free first cut from the 8-seed churn CSV, then a snappy check):
+`sat_frac` (= Pr(velocity_norm ≥ Vmax), the M6-style metric added in Ciclo 0):
+- default regime (τ_a=1, rates 6/12/24/48): `sat_frac = 0.0000` for BOTH baseline
+  and B2 (median AND max). Velocities sit at ~3–9% of Vmax (effort_mean_v2
+  0.001–0.008). Effort is ~2–2.7× baseline but of a TINY absolute.
+- snappy regime (τ_a=0.2, rate 24, 3 seeds, `churn_sweep_results_c4_snappy_tau02.csv`):
+  `sat_frac = 0.0000` too (baseline and B2); effort B2 0.0073 (~3.8× baseline,
+  still ~8% of Vmax); overlay still helps (adv 1.20).
+
+**Verdict: no windup pathology under churn.** Windup requires actuator
+SATURATION (the integrator/accumulator winds up while the command can't be
+realized); with `sat_frac = 0` there is no saturation → no windup → the 2× effort
+is a benign trade-off (the overlay actively redistributes via feedforward; the
+baseline only relaxes — more motion, but well below the actuator limit). A
+dedicated anti-windup / limiter is **not warranted** for the studied regime.
+The only saturation in the project is the CLEAN single-fault snappy regime
+(τ_a=0.2, Cap. 6 §6.6, a declared boundary of the dimensionless law), and there
+**M8 already provides anti-windup** by construction (`consume_motion` drains the
+shift at the saturation-CLIPPED commanded rotation, not the nominal). A limiter
+would only matter for hardware combining small τ_a with dense churn — untested,
+flagged as out of scope. Front 4 CLOSED (negative-becomes-data: measured before
+building, avoided an unnecessary mechanism). Methodology note: `sat_frac` is the
+right discriminator and is now exercised; the effort 2× alone is not evidence of
+pathology.
