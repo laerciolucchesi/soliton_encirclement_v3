@@ -361,10 +361,17 @@ K_TAU: float = 0.2          # tangential control gain (velocity scaling)
 BETA_U: float = 7.0         # legacy single-channel damping (kept for reference)
 BETA_U_LOCAL: float = 7.0   # damping for the local error channel
 BETA_U_PROP: float = 7.0    # damping for the propagated error channel
+# Spacing-error injection gain (e_tau multiplier). Default is the STABLE
+# normalized gain K_E_TAU = 250/N: the normalized e_tau injects an effective
+# gain factor ~N near equilibrium, so a FIXED gain destabilizes large rings
+# (measured: smooth ~2 s limit cycle at N>=50). Normalizing keeps the gain
+# product constant across N. At the default NUM_AGENTS=10 this equals the
+# legacy literal 25.0, so default-N runs are numerically unchanged.
+# Env-overridable for gain-normalization studies.
 try:
-    K_E_TAU: float = float(_os.environ.get("K_E_TAU", "25.0"))   # env-overridable (gain-normalization study)
+    K_E_TAU: float = float(_os.environ.get("K_E_TAU", str(250.0 / NUM_AGENTS)))
 except ValueError:
-    K_E_TAU = 25.0          # spacing error injection gain (e_tau multiplier)
+    K_E_TAU = 250.0 / NUM_AGENTS
 U_CONFLICT_BLEND_WIDTH: float = 0.2  # 0.0 restores the previous hard winner-takes-all conflict composition
 
 # Composition policy for u_local + u_prop in TangentialSpacingController._compose:
@@ -431,20 +438,51 @@ FAST_CHANNEL_WARMUP_SEC: float = 1.0
 # Discrete bidirectional pulses with hop counts. Each ring node discovers N and its
 # own angular shift target locally — no global topology knowledge required.
 #
-# Integration path: unlike the e_tau-driven layers, DualPulseLayer modifies the
-# pred_gap/succ_gap inputs to compute_e_tau_used (Option A). It does NOT feed
-# u_prop via get_neighbor_signal().
+# Integration path: DualPulseLayer never feeds u_prop via get_neighbor_signal().
+# The computed shift enters the control loop according to DUAL_PULSE_INTEGRATION
+# below. The DEFAULT is "B2" (2-DOF feedforward with the full cancelling bias) —
+# the thesis-validated configuration: stable, flat reconfiguration time
+# (~2*T_FF, N-independent up to N=100 with TTL>=N). The legacy gap-bias
+# integration remains available via DUAL_PULSE_INTEGRATION=A.
+
+# DUAL_PULSE_INTEGRATION: how the computed redistribution shift enters the control loop.
+#   "B2"  : (DEFAULT) feedforward velocity v_ff = (shift/T_FF)*r (gain-INDEPENDENT) plus
+#           the FULL cancelling bias (succ+(s_succ-s_self), pred-(s_pred-s_self)) ->
+#           feedback ~0 on-plan (NO double-drive); the feedforward is the SOLE driver.
+#   "B"   : like B2 but with the MINIMAL cancelling bias (succ+s_succ, pred-s_pred) ->
+#           feedback ~2*s_self (mild double-drive). Kept for the ablation study.
+#   "A"   : legacy Option A — bias the gaps by the agent's OWN shift; the spacing
+#           controller's reflex drives the motion (execution GATED by the controller gain).
+#   "OFF" : dual_pulse layer runs (pulses circulate) but does NOT touch control (pure baseline).
+DUAL_PULSE_INTEGRATION: str = _os.environ.get("DUAL_PULSE_INTEGRATION", "B2").strip().upper()
+if DUAL_PULSE_INTEGRATION not in ("A", "B", "B2", "OFF"):
+    DUAL_PULSE_INTEGRATION = "B2"
+
+# DUAL_PULSE_T_FF: feedforward time constant (s) for modes B/B2. The agent consumes its
+# remaining shift at rate shift/T_FF, so the redistribution executes with a ~T_FF time
+# constant INDEPENDENT of the controller gain. Default follows the approved adaptation
+# rule T_FF = tau_a (= VM_TAU_XY, the actuation time constant; c_FF = 1.0): the
+# feedforward should not command faster than the platform can actuate. At the default
+# VM_TAU_XY=1.0 this equals the legacy literal 1.0.
+try:
+    DUAL_PULSE_T_FF: float = float(_os.environ.get("DUAL_PULSE_T_FF", str(VM_TAU_XY)))
+except ValueError:
+    DUAL_PULSE_T_FF = VM_TAU_XY
+if DUAL_PULSE_T_FF < 0.0:
+    DUAL_PULSE_T_FF = VM_TAU_XY
 
 # DUAL_PULSE_TTL_HOPS: pulse discarded after this many forwards. Safety BACKSTOP only
 # (the refractory_cache already self-terminates a pulse after ~one ring). MUST be >= ~N:
 # a receiver needs the long-way pulse up to ~N-1 hops and the originator needs ~N hops for
-# its return, so TTL < N TRUNCATES the redistribution (coverage collapses). A large value
-# does NOT hurt small N (the cache stops the pulse first). Env-overridable; default kept at
-# 50 for back-compat but it must be raised (>= N, e.g. ~3N or a fixed 500) for N > ~50.
+# its return, so TTL < N TRUNCATES the redistribution (measured: TTL=50 collapsed shift
+# coverage 96% -> 36% -> 1% at N=50/75/100). A large value does NOT hurt small N (the
+# refractory cache stops the pulse after ~one ring regardless). Default scales with the
+# ring size: 3*NUM_AGENTS with a floor of 50 (= the legacy literal at the default N=10).
+# Env-overridable (absolute value) for TTL studies.
 try:
-    DUAL_PULSE_TTL_HOPS: int = int(_os.environ.get("DUAL_PULSE_TTL_HOPS", "50"))
+    DUAL_PULSE_TTL_HOPS: int = int(_os.environ.get("DUAL_PULSE_TTL_HOPS", str(max(50, 3 * NUM_AGENTS))))
 except ValueError:
-    DUAL_PULSE_TTL_HOPS = 50
+    DUAL_PULSE_TTL_HOPS = max(50, 3 * NUM_AGENTS)
 
 # DUAL_PULSE_GAP_CLIP_FRAC: shift_remaining is clipped so that virtual gaps stay
 # positive with margin. Value is fraction of the smaller real gap.
@@ -455,18 +493,22 @@ DUAL_PULSE_GAP_CLIP_FRAC: float = 0.8
 DUAL_PULSE_MIN_RING_SIZE: int = 3
 
 # DUAL_PULSE_DELTA_SCALE: multiplicative factor applied to delta_D (receivers)
-# and delta_orig (originator). Range: (0, 1]. With scale = 1.0 the algorithm
-# applies the full analytical redistribution shift in one step, which gives
-# the strongest "head start" to distant agents but overshoots the controller
-# at the immediate neighbors of the dead drone (M3/M5 worse). Lower values
-# attenuate the shift uniformly: the direction is preserved, only the
-# magnitude is reduced. Tunable via env var DUAL_PULSE_DELTA_SCALE for sweeps.
+# and delta_orig (originator). Range: (0, 1]. The default is MODE-DEPENDENT:
+#   - B/B2 (feedforward): 1.0 — deliver the full analytical shift. Validated:
+#     with the B2 full cancelling bias there is no feedback double-drive, so
+#     the full shift executes cleanly; scale < 1 leaves a slow residual tail
+#     for the O(N^2) feedback to clean (measured on the scaling-law campaign).
+#   - A (legacy gap-bias): 0.5 — scale = 1.0 overshoots under Option A because
+#     execution runs through the controller gain (M3 jitter / M5 effort
+#     degrade, measured); 0.5 was the tuned operating point.
+# Env-overridable for sweeps.
+_DPS_DEFAULT = 1.0 if DUAL_PULSE_INTEGRATION in ("B", "B2") else 0.5
 try:
-    DUAL_PULSE_DELTA_SCALE: float = float(_os.environ.get("DUAL_PULSE_DELTA_SCALE", "0.5"))
+    DUAL_PULSE_DELTA_SCALE: float = float(_os.environ.get("DUAL_PULSE_DELTA_SCALE", str(_DPS_DEFAULT)))
 except ValueError:
-    DUAL_PULSE_DELTA_SCALE = 0.5
+    DUAL_PULSE_DELTA_SCALE = _DPS_DEFAULT
 if not (0.0 < DUAL_PULSE_DELTA_SCALE <= 1.0):
-    DUAL_PULSE_DELTA_SCALE = 0.5
+    DUAL_PULSE_DELTA_SCALE = _DPS_DEFAULT
 
 # DUAL_PULSE_RAMP_TICKS: number of control ticks over which a freshly
 # computed delta_D is ramped into the applied shift, instead of being
@@ -635,28 +677,8 @@ except ValueError:
 if DUAL_PULSE_SLEEP_THRESHOLD < 0.0:
     DUAL_PULSE_SLEEP_THRESHOLD = 0.0
 
-# DUAL_PULSE_INTEGRATION: how the computed redistribution shift enters the control loop.
-#   "A"   : Option A (legacy) — bias the gaps by the agent's OWN shift; the spacing
-#           controller's reflex drives the motion (execution GATED by the controller gain).
-#   "B"   : Option B (feedforward, 2-DOF) — DIRECT feedforward velocity (gain-INDEPENDENT)
-#           executes the redistribution; the feedback sees a MINIMAL cancelling bias from the
-#           neighbours' shifts (succ+s_succ, pred-s_pred) -> feedback ~2*s_self (mild double-drive).
-#   "B2"  : like B but the FULL cancelling bias (succ+(s_succ-s_self), pred-(s_pred-s_self)) ->
-#           feedback ~0 on-plan (NO double-drive) so the feedforward is the SOLE driver.
-#   "OFF" : dual_pulse layer runs (pulses circulate) but does NOT touch control (pure baseline).
-DUAL_PULSE_INTEGRATION: str = _os.environ.get("DUAL_PULSE_INTEGRATION", "A").strip().upper()
-if DUAL_PULSE_INTEGRATION not in ("A", "B", "B2", "OFF"):
-    DUAL_PULSE_INTEGRATION = "A"
-
-# DUAL_PULSE_T_FF: feedforward time constant (s) for Option B. The agent consumes its
-# remaining shift at rate shift/T_FF, so the redistribution executes with a ~T_FF time
-# constant INDEPENDENT of the controller gain. Lower-bounded by actuation (T_FF >~ VM_TAU_XY).
-try:
-    DUAL_PULSE_T_FF: float = float(_os.environ.get("DUAL_PULSE_T_FF", "1.0"))
-except ValueError:
-    DUAL_PULSE_T_FF = 1.0
-if DUAL_PULSE_T_FF < 0.0:
-    DUAL_PULSE_T_FF = 1.0
+# NOTE: DUAL_PULSE_INTEGRATION and DUAL_PULSE_T_FF are defined at the TOP of this
+# section (9c) because DUAL_PULSE_DELTA_SCALE's default depends on the mode.
 
 
 # --------------------------------------------------------------------------------------

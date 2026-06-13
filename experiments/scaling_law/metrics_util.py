@@ -11,6 +11,8 @@ Reporta o PAR (t_settle, egap_settle): t_settle = "quanto tempo"; egap_settle (=
 fim -> t_settle = inf (= nao assentou). tau_fit fica como SECUNDARIO (taxa/forma, so confiavel
 com R2 alto). Para churn continuo (sem assentamento) use egap_avg.
 """
+import os
+
 import numpy as np
 
 TAIL_FLOOR_FRAC = 0.05      # piso do ajuste exponencial (fracao do pico)
@@ -65,6 +67,39 @@ def settling_time(t, e, band_frac=SETTLE_BAND_FRAC, asymptote_win=ASYMPTOTE_WIN,
     return t_settle, e_inf
 
 
+def overshoot_frac(t, e, band_frac=SETTLE_BAND_FRAC, asymptote_win=ASYMPTOTE_WIN,
+                   late_std=None, noise_k=SETTLE_NOISE_K):
+    """Re-excursao apos a primeira entrada na banda, como fracao da amplitude do evento.
+
+    Definicao (controle classico adaptado ao decaimento de E_gap):
+      overshoot = max(0, max(E_gap apos a 1a entrada na banda) - (E_gap_inf + banda))
+                  normalizado por (E_gap_peak - E_gap_inf).
+    O excesso e' medido ALEM da banda (nao da assintota): a 1a amostra dentro da
+    banda fica na borda dela, entao medir a partir de E_gap_inf reportaria
+    ~band_frac para um decaimento perfeitamente monotonico. Com esta definicao:
+    0.0 = assentamento monotonico; > 0 = ringing/re-excursao (o sinal volta a
+    SAIR da banda depois de te-la alcancado). NaN se nunca entra na banda.
+    """
+    if t.size == 0:
+        return float("nan")
+    e_peak = float(np.nanmax(e))
+    t_end = float(t[-1])
+    win_mask = t >= (t_end - asymptote_win)
+    e_inf = float(np.nanmedian(e[win_mask])) if win_mask.any() else float(e[-1])
+    band = band_frac * e_peak
+    if late_std is not None and np.isfinite(late_std):
+        band = max(band, noise_k * float(late_std))
+    inside = np.abs(e - e_inf) <= band
+    if not inside.any():
+        return float("nan")                      # nunca alcancou a banda
+    i_first = int(np.argmax(inside))             # primeira entrada
+    amp = e_peak - e_inf
+    if not np.isfinite(amp) or amp <= 0.0:
+        return 0.0
+    post = e[i_first:]
+    return float(max(0.0, float(np.nanmax(post)) - (e_inf + band)) / amp)
+
+
 def event_metrics(df, t0):
     """df: DataFrame com colunas timestamp, E_gap. Retorna dict de metricas pos-t0."""
     full = df
@@ -87,7 +122,69 @@ def event_metrics(df, t0):
         "t_settle": t_settle, "t_settle_2pct": t_settle_2pct, "egap_settle": egap_settle,
         "egap_peak": float(np.nanmax(e)), "egap_final": float(e[-1]),
         "egap_avg": egap_avg, "egap_late_std": late_std,
+        "overshoot_frac": overshoot_frac(t, e, late_std=late_std),
     }
+
+
+def effort_metrics(agent_csv, t0=0.0, vmax=10.0):
+    """Metricas de esforco/saturacao/fairness do agent_telemetry.csv (estilo M5/M6/M2).
+
+    CHAMAR ANTES de o runner apagar o agent_telemetry.csv. Le apenas as colunas
+    necessarias (o arquivo pode ter dezenas de MB).
+      effort_mean_v2 : mean((velocity_norm/vmax)^2), t >= t0  (esforco de controle, M5)
+      sat_frac       : Pr(velocity_norm >= vmax - tol), t >= t0 (saturacao, M6)
+      fairness_p95   : P95 entre nos do P95 por-no de |e_tau_real| (fairness, M2;
+                       cai para e_tau quando e_tau_real nao existe)
+    Retorna {} se o arquivo nao existe/esta vazio.
+    """
+    import pandas as pd  # local: o resto do modulo so precisa de numpy
+    if not agent_csv or not os.path.exists(agent_csv):
+        return {}
+    try:
+        header = pd.read_csv(agent_csv, nrows=0).columns
+    except Exception:
+        return {}
+    e_col = "e_tau_real" if "e_tau_real" in header else ("e_tau" if "e_tau" in header else None)
+    usecols = [c for c in ("node_id", "timestamp", "velocity_norm", e_col) if c in header]
+    if "timestamp" not in usecols or "velocity_norm" not in usecols:
+        return {}
+    try:
+        df = pd.read_csv(agent_csv, usecols=usecols)
+    except Exception:
+        return {}
+    df = df[df["timestamp"] >= t0]
+    if df.empty:
+        return {}
+    v = df["velocity_norm"].to_numpy(float)
+    v = v[np.isfinite(v)]
+    out = {}
+    if v.size and np.isfinite(vmax) and vmax > 0:
+        vn = v / float(vmax)
+        out["effort_mean_v2"] = float(np.mean(vn * vn))
+        out["sat_frac"] = float(np.mean(v >= float(vmax) - 1e-9))
+    if e_col is not None and "node_id" in df.columns:
+        per_node = df.groupby("node_id")[e_col].apply(
+            lambda s: float(np.percentile(np.abs(s.to_numpy(float)), 95)) if len(s) else float("nan")
+        ).to_numpy(float)
+        per_node = per_node[np.isfinite(per_node)]
+        if per_node.size:
+            out["fairness_p95"] = float(np.percentile(per_node, 95))
+    return out
+
+
+def aggregate_seeds(values):
+    """Mediana, pior caso (max) e desvio entre seeds, NaN-safe.
+
+    Para todas as metricas de campanha "maior = pior" (egap_*, t_settle, effort,
+    sat_frac), o pior caso e' o maximo. Reportar mediana E pior caso evita
+    conclusoes baseadas so na tendencia central (requisito da campanha).
+    """
+    arr = np.asarray([v for v in values if v is not None], dtype=float)
+    arr = arr[np.isfinite(arr)]
+    if arr.size == 0:
+        return {"median": float("nan"), "worst": float("nan"), "std": float("nan")}
+    return {"median": float(np.median(arr)), "worst": float(np.max(arr)),
+            "std": float(np.std(arr))}
 
 
 def _selftest():

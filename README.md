@@ -238,10 +238,15 @@ the pulse arrive from both directions it knows its hop position in the
 ring and computes the angular shift needed to redistribute uniformly in
 the new ring size — all from local information, with no global agent
 count. Unlike the `u_prop` layers, this shift is **not** fed in as a
-second control channel; it biases the `pred_gap` / `succ_gap`
-measurements the spacing controller already consumes ("Option A"), so the
-existing dynamics drive the redistribution. The `DUAL_PULSE_*` knobs in
-[config_param.py](config_param.py) tune it.
+second control channel. By default (`DUAL_PULSE_INTEGRATION=B2`, the
+2-DOF feedforward) the shift is executed by a direct feedforward velocity
+`v_ff = (shift/T_FF) * r` outside the controller gain, while the feedback
+sees a fully cancelling gap bias — this gives a flat reconfiguration time
+(~2*T_FF, independent of N) versus the baseline's O(N^2). The legacy
+gap-bias integration ("A") and an ablation mode ("B") remain available
+via env. The `DUAL_PULSE_*` knobs in [config_param.py](config_param.py)
+tune it; see `docs/experiments/` for the validated configuration and the
+experimental evidence.
 
 ### Final commanded velocity
 

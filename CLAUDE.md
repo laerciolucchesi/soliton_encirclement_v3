@@ -23,9 +23,10 @@ swarm ring, hence the repo name.
 
 `dual_pulse` is the **flagship method** — a discrete soliton-inspired
 mechanism with counter-propagating pulses, hop-count topology discovery,
-and a separate "Option A" integration that biases the spacing-error gaps
-seen by the controller (it does NOT feed `u_prop` like the other layers).
-See its dedicated section below.
+and a 2-DOF feedforward integration (default "B2") that executes the
+computed redistribution shift outside the controller gain (it does NOT
+feed `u_prop` like the other layers; legacy gap-bias mode "A" remains
+available via env). See its dedicated section below.
 
 ## Top-level layout
 
@@ -39,10 +40,13 @@ soliton_encirclement_v3/
 ├── protocol_messages.py         # AgentState, TargetState, AdversaryState (JSON)
 ├── controllers.py               # Radial PD, Wrapped-angle PD, Tangential 2-channel
 ├── propagation_layer.py         # ABC + 7 e_tau-driven layers + factory
-├── dual_pulse_layer.py          # 8th layer: hop-count discrete pulses (Option A)
+├── dual_pulse_layer.py          # 8th layer: hop-count discrete pulses (B2 feedforward)
 ├── plot_telemetry.py            # Per-node plots and 7 scalar metrics (M1..M7)
 ├── pyproject.toml               # Editable install; src/ is the package root
 ├── README.md, CONTROLE.md       # User documentation; control-law derivations
+├── docs/experiments/            # EN campaign docs: locked B2 config, scenarios,
+│                                #   metrics, evidence index, hypothesis log
+├── experiments/scaling_law/     # Campaign runners + canonical result CSVs
 ├── src/
 │   └── velocity_mobility/       # Reusable velocity-driven mobility handler
 ├── demos/velocity_mobility/     # Standalone mobility demo (single node)
@@ -194,11 +198,23 @@ its own hop position relative to the dead/recovered drone and can compute
 the angular shift `delta_D` it should apply to redistribute uniformly in
 the new ring size.
 
-The shift is **not** fed into `u_prop`; instead it modifies the
-`pred_gap` / `succ_gap` measurements that `compute_e_tau_used` consumes
-("Option A integration"). This lets the controller's existing dynamics
-drive the redistribution motion rather than overlaying a second control
-channel.
+The shift is **not** fed into `u_prop`. How it enters the control loop is
+selected by `DUAL_PULSE_INTEGRATION` (default **"B2"**, the thesis-validated
+2-DOF feedforward):
+
+- **B2 (default):** a direct feedforward velocity `v_ff = (shift/T_FF) * r`
+  executes the redistribution (gain-independent, time constant
+  `DUAL_PULSE_T_FF`, default = `VM_TAU_XY`), while the feedback sees the
+  FULL cancelling gap bias `succ + (s_succ - s_self)`, `pred - (s_pred -
+  s_self)` — ~0 on-plan, so the feedforward is the sole driver. Result:
+  flat reconfiguration time ~2*T_FF, N-independent up to N=100 (with
+  TTL >= N), vs the baseline's O(N^2).
+- **B:** same feedforward but the MINIMAL cancelling bias (mild
+  double-drive). Kept for ablation.
+- **A (legacy):** biases the agent's own `pred_gap` / `succ_gap` inputs to
+  `compute_e_tau_used`; the controller's reflex drives the motion, so
+  execution is gated by the controller gain.
+- **OFF:** pulses circulate but control is untouched (pure baseline).
 
 **SAIDA δ formula (receiver):**
 ```
@@ -224,24 +240,48 @@ special formula:
 partner.id)`) injects. The non-canonical side stays silent. If the canonical
 fails between detection and injection, the event is lost — accepted in v1.
 
-**v1.7 tunable knobs** (all in `config_param.py`):
-- `DUAL_PULSE_TTL_HOPS=50` — circulation safety.
+**Tunable knobs** (all in `config_param.py`):
+- `DUAL_PULSE_INTEGRATION="B2"` — integration mode (B2/B/A/OFF, see above).
+- `DUAL_PULSE_T_FF=VM_TAU_XY` — feedforward time constant (B/B2); follows
+  the approved rule T_FF = tau_a (actuation-matched).
+- `DUAL_PULSE_TTL_HOPS=max(50, 3*NUM_AGENTS)` — circulation safety backstop.
+  MUST be >= N or the redistribution truncates (measured: TTL=50 collapsed
+  coverage to 1% at N=100); large values do not hurt small N.
 - `DUAL_PULSE_GAP_CLIP_FRAC=0.8` — keeps virtual gaps positive.
 - `DUAL_PULSE_MIN_RING_SIZE=3` — below this, skip the math.
-- `DUAL_PULSE_DELTA_SCALE=0.5` — global δ scale (1.0 = analytical formula).
-- `DUAL_PULSE_RAMP_TICKS=4` — lerp ramp on shift accumulation (~40ms).
+- `DUAL_PULSE_DELTA_SCALE` — global δ scale; mode-dependent default:
+  1.0 for B/B2 (full analytical shift, validated), 0.5 for legacy A
+  (scale=1.0 overshoots when execution runs through the controller gain).
+- `DUAL_PULSE_RAMP_TICKS=4` — lerp ramp on shift accumulation (~40ms at
+  dt=0.01; tick-denominated, so the physical ramp scales with dt).
+- `DUAL_PULSE_CONSUME_FF_ONLY=True` (M8) — `consume_motion` deducts only the
+  FF-commanded rotation (previous tick), not the full measured Δθ; prevents
+  target-tracking rotation from eating the shift under maneuvers. Active
+  only in B/B2.
 - `DUAL_PULSE_ALPHA_CLOSE_RATIO=0.7` — attenuation at the immediate
   neighbours of D (1.0 = no attenuation).
 - `DUAL_PULSE_ALPHA_CURVE_POWER=1.0` — interpolation exponent for the
   alpha curve (1.0 = linear; >1.0 concentrates attenuation near D).
-- `DUAL_PULSE_SLEEP_THRESHOLD=0.01` — when `|shift_remaining|` is below
-  this, the gap-bias step is skipped entirely (sleeping mode). Prevents
-  subtle controller-vs-tracking interference between events.
+- `DUAL_PULSE_SLEEP_THRESHOLD=0.01` — mode-A only: when `|shift_remaining|`
+  is below this the gap-bias step is skipped (B/B2 do not use the sleep
+  gate; their only gap guard is a 1e-3 floor).
+- Explored-and-discarded flags, kept gated off for the record:
+  `DUAL_PULSE_GATE_*` (binary churn gate — hurts with the neighbor-only
+  trigger), `DUAL_PULSE_USE_STAMPED_N` (M2 — violates the neighbor-only
+  premise; dead code in the current wiring, n_stamp is never passed),
+  `DUAL_PULSE_IDEMPOTENT` (M5 — loses simultaneous-drop accumulation),
+  `DUAL_PULSE_ADD_IF_SETTLED` (worst of all). See
+  `docs/experiments/CAMPAIGN_LOG.md`.
 
-**Trigger gates** (in `protocol_agent.py` control loop):
+**Trigger gates** (in `protocol_agent.py` control loop) — neighbor-only
+(the 2026-06 "premissa-limpo" refactor removed all global `alive_count`
+logic from the trigger; that global gate was the root cause of the
+apparent churn fragility):
 - Inject only when `succ_changed AND not in_warmup`.
-- SAIDA gate: also require `alive_count` decreased since last tick.
-- ENTRADA gate: require `alive_count` increased AND `recovered_id =
+- Direction is classified by `_classify_succ_event(succ_changed,
+  old_succ_alive)` using the LOCAL freshness of the previous successor:
+  previous succ went stale → SAIDA; still alive → ENTRADA (a node appeared
+  between us). ENTRADA injection also requires `recovered_id =
   neighbor_succ_id`.
 - Warmup window (`FAST_CHANNEL_WARMUP_SEC=1.0s`) silences both injection
   paths during initial neighbor discovery.

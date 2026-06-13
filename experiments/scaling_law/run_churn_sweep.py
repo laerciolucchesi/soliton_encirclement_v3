@@ -20,6 +20,9 @@ import subprocess
 import numpy as np
 import pandas as pd
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from metrics_util import aggregate_seeds, effort_metrics  # noqa: E402
+
 EXP_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(os.path.dirname(EXP_DIR))
 MAIN_PY = os.path.join(REPO_ROOT, "main.py")
@@ -37,6 +40,7 @@ BUDGET = float(os.environ.get("CHURN_BUDGET", "150"))
 METHODS = [m.strip() for m in os.environ.get("CHURN_METHODS", "baseline,dual_pulse").split(",") if m.strip()]
 T0 = 5.0
 WARMUP_AVG = 15.0  # ignora o transiente inicial no egap_avg
+VMAX = float(os.environ.get("VM_MAX_SPEED_XY", "10.0"))  # p/ effort/saturacao (M5/M6)
 
 
 def metrics_from_tgt(tgt):
@@ -81,6 +85,9 @@ def run_cell(method, rate_total, seed):
     if not m:
         print(f"     FAILED (rc={proc.returncode})\n{(proc.stderr or '')[-600:]}")
         return None
+    # Effort/saturation/fairness (M5/M6/M2) BEFORE deleting agent_telemetry.csv.
+    m.update(effort_metrics(os.path.join(run_dir, "agent_telemetry.csv"),
+                            t0=T0 + WARMUP_AVG, vmax=VMAX))
     for fn in os.listdir(run_dir):
         if fn == "agent_telemetry.csv" or fn.endswith(".png"):
             try:
@@ -88,7 +95,8 @@ def run_cell(method, rate_total, seed):
             except OSError:
                 pass
     m.update({"method": tag, "N": N, "tau_xy": TAU, "rate_total": rate_total, "off": OFF, "seed": seed})
-    print(f"     egap_avg={m['egap_avg']:.4f}  egap_p90={m['egap_p90']:.4f}")
+    print(f"     egap_avg={m['egap_avg']:.4f}  egap_p90={m['egap_p90']:.4f}  "
+          f"effort={m.get('effort_mean_v2', float('nan')):.4f}")
     return m
 
 
@@ -117,18 +125,33 @@ def main():
     df = pd.DataFrame(list(store.values()))
     if df.empty:
         print("\nSem resultados."); return
-    print("\n=== egap_avg (mediana entre seeds) por taxa; vantagem = baseline/B2 ===")
-    print(f"{'rate/min':>9} {'inter(s)':>8} {'egap_base':>10} {'egap_B2':>9} {'vantagem':>9}")
+    print("\n=== egap_avg por taxa: mediana E pior caso entre seeds; vantagem = baseline/B2 ===")
+    print(f"{'rate/min':>9} {'inter(s)':>8} {'egap_base':>10} {'egap_B2':>9} {'vantagem':>9} "
+          f"{'B2_worst':>9} {'adv_worst':>9} {'eff_B2/bs':>9}")
     for rate in sorted(df.rate_total.unique()):
-        b = df[(df.method == "baseline") & (df.rate_total == rate)]["egap_avg"].dropna()
-        o = df[(df.method == "B2") & (df.rate_total == rate)]["egap_avg"].dropna()
-        eb = float(b.median()) if len(b) else float("nan")
-        eo = float(o.median()) if len(o) else float("nan")
+        b = df[(df.method == "baseline") & (df.rate_total == rate)]
+        o = df[(df.method == "B2") & (df.rate_total == rate)]
+        ab = aggregate_seeds(b["egap_avg"].tolist())
+        ao = aggregate_seeds(o["egap_avg"].tolist())
+        eb, eo = ab["median"], ao["median"]
         adv = (eb / eo) if (np.isfinite(eb) and np.isfinite(eo) and eo > 0) else float("nan")
+        # Worst-case advantage: the baseline's BEST seed vs the overlay's WORST —
+        # the conservative bound the campaign requires (not just central tendency).
+        b_best = float(np.nanmin(b["egap_avg"])) if len(b) else float("nan")
+        adv_worst = (b_best / ao["worst"]) if (np.isfinite(b_best) and np.isfinite(ao["worst"])
+                                               and ao["worst"] > 0) else float("nan")
+        eff_ratio = float("nan")
+        if "effort_mean_v2" in df.columns:
+            eb_eff = float(b["effort_mean_v2"].median()) if len(b) else float("nan")
+            eo_eff = float(o["effort_mean_v2"].median()) if len(o) else float("nan")
+            if np.isfinite(eb_eff) and eb_eff > 0 and np.isfinite(eo_eff):
+                eff_ratio = eo_eff / eb_eff
         inter = 60.0 / rate if rate > 0 else float("inf")
-        print(f"{rate:>9g} {inter:>8.2f} {eb:>10.4f} {eo:>9.4f} {adv:>9.2f}")
+        print(f"{rate:>9g} {inter:>8.2f} {eb:>10.4f} {eo:>9.4f} {adv:>9.2f} "
+              f"{ao['worst']:>9.4f} {adv_worst:>9.2f} {eff_ratio:>9.2f}")
     print(f"\nWrote {RESULTS_CSV}")
-    print("Leitura: vantagem>1 = overlay ajuda; ~1 = empata (denso). Pico esperado em taxa moderada.")
+    print("Leitura: vantagem>1 = overlay ajuda; ~1 = empata (denso). adv_worst = limite conservador "
+          "(melhor seed do baseline vs pior do B2). eff_B2/bs > 1 = overlay gasta mais atuacao.")
 
 
 if __name__ == "__main__":

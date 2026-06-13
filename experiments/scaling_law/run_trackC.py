@@ -20,7 +20,7 @@ import subprocess
 import numpy as np
 import pandas as pd
 
-from metrics_util import event_metrics
+from metrics_util import effort_metrics, event_metrics
 
 EXP_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(os.path.dirname(EXP_DIR))
@@ -40,6 +40,7 @@ N = int(os.environ.get("TRACKC_N", "24"))
 TAU = float(os.environ.get("TRACKC_TAU", "1.0"))
 BUDGET = float(os.environ.get("TRACKC_BUDGET", "100"))
 T0 = 5.0
+VMAX = float(os.environ.get("VM_MAX_SPEED_XY", "10.0"))  # p/ effort/saturacao (M5/M6)
 
 
 def victim_node_id(n, seed=0):
@@ -153,6 +154,8 @@ def run_cell(method, scenario, motion, seed):
     m = event_metrics(pd.read_csv(tgt), T0)
     er, evr = tracking_avg(tgt)
     inj = n_injections(os.path.join(run_dir, "events.csv"))
+    # Effort/saturation/fairness (M5/M6/M2) BEFORE deleting agent_telemetry.csv.
+    eff = effort_metrics(os.path.join(run_dir, "agent_telemetry.csv"), t0=T0, vmax=VMAX)
     for fn in os.listdir(run_dir):
         if fn == "agent_telemetry.csv" or fn.endswith(".png"):
             try:
@@ -161,10 +164,15 @@ def run_cell(method, scenario, motion, seed):
                 pass
     row = {"method": tag, "scenario": scenario, "motion": motion, "seed": seed, "speed": SPEED,
            "egap_avg": m.get("egap_avg", float("nan")), "t_settle": m.get("t_settle", float("nan")),
-           "egap_settle": m.get("egap_settle", float("nan")), "Er_avg": er, "Evr_avg": evr,
+           "egap_settle": m.get("egap_settle", float("nan")),
+           "overshoot_frac": m.get("overshoot_frac", float("nan")),
+           "Er_avg": er, "Evr_avg": evr,
+           "effort_mean_v2": eff.get("effort_mean_v2", float("nan")),
+           "sat_frac": eff.get("sat_frac", float("nan")),
+           "fairness_p95": eff.get("fairness_p95", float("nan")),
            "n_inj": inj, "has_event": has_event}
     print(f"     egap_avg={row['egap_avg']:.4f} t_settle={row['t_settle']:.2f} "
-          f"Er_avg={er:.4f} n_inj={inj}")
+          f"Er_avg={er:.4f} effort={row['effort_mean_v2']:.4f} n_inj={inj}")
     return row
 
 

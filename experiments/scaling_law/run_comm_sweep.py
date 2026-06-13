@@ -6,11 +6,19 @@ DUAL_PULSE_BROADCAST_REPEATS (redundancia dos pulsos), p/ baseline e B2, N e tau
 MULTI-SEED (perda e' estocastica). Budget grande (sob perda o B2 nao assenta). Metrica robusta
 = egap_final (o tau_fit quebra sob perda). Merge incremental.
 
+O sweep aplica por default o FD-fix validado: AGENT_STATE_TIMEOUT = 20*dt (0.2 s),
+porque o default do projeto (5*dt) torna o detector de falhas vulneravel a falsos
+positivos sob perda (5 perdas consecutivas marcam um vizinho VIVO como morto ->
+tempestade de SAIDA/ENTRADA falsos; diagnostico Track A 2026-06). O timeout usado
+e' gravado em cada linha do CSV (coluna agent_state_timeout) para proveniencia.
+Use COMM_FD_TIMEOUT para estudar o proprio timeout (ex.: reproduzir a vulnerabilidade
+pre-fix com COMM_FD_TIMEOUT=0.05).
+
 Uso:
     python experiments/scaling_law/run_comm_sweep.py
     # env: COMM_LOSS_VALUES="0,0.05,0.1,0.2,0.4"  COMM_DELAY="0.0"  COMM_REPEATS="2"
     #      COMM_N="24" COMM_TAU="1.0" COMM_METHODS="baseline,dual_pulse" COMM_SEEDS="0,1,2"
-    #      COMM_BUDGET="150"  COMM_TAG=""
+    #      COMM_BUDGET="150"  COMM_TAG=""  COMM_FD_TIMEOUT="0.2"
 """
 import os
 import sys
@@ -18,6 +26,9 @@ import subprocess
 
 import numpy as np
 import pandas as pd
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from metrics_util import effort_metrics  # noqa: E402
 
 _THIS = os.path.abspath(__file__)
 EXP_DIR = os.path.dirname(_THIS)
@@ -39,6 +50,10 @@ SEEDS = [int(x) for x in os.environ.get("COMM_SEEDS", "0,1,2").split(",") if x.s
 BUDGET = float(os.environ.get("COMM_BUDGET", "150"))
 GAIN_PRODUCT = float(os.environ.get("GAIN_PRODUCT", "250"))
 DT = 0.01
+# FD-fix (Track A): failure-detector timeout robust to packet loss. 20*dt covers
+# loss up to ~0.4 (0.4^20 ~ 1e-8 false-positive odds per window) vs the project
+# default 5*dt which is exactly the pre-fix vulnerable setting.
+FD_TIMEOUT = float(os.environ.get("COMM_FD_TIMEOUT", str(20 * DT)))
 T0 = 5.0
 TAIL_FLOOR_FRAC = 0.05
 LATE_WIN = 20.0
@@ -89,6 +104,7 @@ def run_cell(method, loss, seed, repeats):
         "NUM_AGENTS": str(N), "SIM_DURATION": str(T0 + BUDGET), "K_E_TAU": f"{k_e_tau:.6f}",
         "VM_TAU_XY": str(TAU), "EXPERIMENT_SEED": str(seed),
         "COMMUNICATION_FAILURE_RATE": f"{loss:g}", "COMMUNICATION_DELAY": f"{DELAY:g}",
+        "AGENT_STATE_TIMEOUT": f"{FD_TIMEOUT:g}",
         "INIT_ANGLES_EQUIDISTANT": "True", "INIT_RADIUS_RANGE": "0.0", "TARGET_MOTION_SPEED_XY": "0.0",
         "VIS_OPEN_BROWSER": "False", "SKIP_TELEMETRY_PLOTS": "True",
         "DETERMINISTIC_FAILURE_ENABLE": "True", "DETERMINISTIC_FAILURE_AGENT_ID": str(victim),
@@ -107,6 +123,8 @@ def run_cell(method, loss, seed, repeats):
         print(f"     FAILED (rc={proc.returncode})\n{(proc.stderr or '')[-800:]}")
         return None
     m = metrics_from_csv(tgt)
+    # Effort/saturation/fairness (M5/M6/M2) BEFORE deleting agent_telemetry.csv.
+    m.update(effort_metrics(os.path.join(run_dir, "agent_telemetry.csv"), t0=T0, vmax=10.0))
     for fn in os.listdir(run_dir):
         if fn == "agent_telemetry.csv" or fn.endswith(".png"):
             try:
@@ -114,7 +132,7 @@ def run_cell(method, loss, seed, repeats):
             except OSError:
                 pass
     m.update({"method": tag, "N": N, "tau_xy": TAU, "loss": loss, "delay": DELAY,
-              "repeats": repeats, "seed": seed})
+              "repeats": repeats, "seed": seed, "agent_state_timeout": FD_TIMEOUT})
     print(f"     egap_final={m.get('egap_final'):.4f}  settled={m.get('settled')}")
     return m
 

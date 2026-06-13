@@ -377,6 +377,56 @@ class AgentProtocol(IProtocol):
         return (now - rxtime) <= AGENT_STATE_TIMEOUT
 
     @staticmethod
+    def _compute_cancelling_bias(
+        mode: str,
+        pred_gap: float,
+        succ_gap: float,
+        s_self: float,
+        s_pred: float,
+        s_succ: float,
+    ) -> Tuple[float, float]:
+        """Gap bias seen by the FEEDBACK under the 2-DOF feedforward modes (B/B2).
+
+        The redistribution motion itself comes from the direct feedforward
+        velocity; this bias only shapes what the spacing controller perceives:
+          - "B2" (full cancel): succ + (s_succ - s_self), pred - (s_pred - s_self).
+            When every agent is on its plan the perceived imbalance is ~0, so
+            the feedback does not double-drive the feedforward.
+          - "B" (minimal cancel): succ + s_succ, pred - s_pred. The own shift is
+            not cancelled, so the feedback still sees ~2*s_self (mild
+            double-drive); kept for the ablation study.
+        Gaps are floored at 1e-3 rad to stay positive for compute_e_tau_used.
+        Returns (pred_gap_used, succ_gap_used).
+        """
+        if mode == "B2":
+            succ_used = max(1e-3, float(succ_gap) + (s_succ - s_self))
+            pred_used = max(1e-3, float(pred_gap) - (s_pred - s_self))
+        else:
+            succ_used = max(1e-3, float(succ_gap) + s_succ)
+            pred_used = max(1e-3, float(pred_gap) - s_pred)
+        return pred_used, succ_used
+
+    @staticmethod
+    def _compute_ff_command(
+        shift: float, t_ff: float, r_eff: float, vmax: float, dt: float
+    ) -> Tuple[float, float]:
+        """Feedforward tangential speed and the rotation it commands in one tick.
+
+        v_ff = (shift / T_FF) * r_eff, clipped to the actuator limit [-vmax, vmax].
+        The returned ff_dtheta = (v_ff_clipped / r_eff) * dt is what M8
+        (DUAL_PULSE_CONSUME_FF_ONLY) deducts from the shift on the NEXT tick —
+        the commanded redistribution rotation, never the tracking rotation.
+        Closed loop on shift_remaining this gives an ~exponential decay with
+        time constant T_FF (slower while saturated at vmax).
+        """
+        v_ff = (float(shift) / float(t_ff)) * float(r_eff)
+        if v_ff > float(vmax):
+            v_ff = float(vmax)
+        elif v_ff < -float(vmax):
+            v_ff = -float(vmax)
+        return v_ff, (v_ff / float(r_eff)) * float(dt)
+
+    @staticmethod
     def _classify_succ_event(succ_changed: bool, old_succ_alive: bool) -> Tuple[bool, bool]:
         """Classify a successor change as a SAIDA or ENTRADA topology event.
 
@@ -1028,15 +1078,10 @@ class AgentProtocol(IProtocol):
                         if not math.isfinite(s_succ):
                             s_succ = 0.0
                         if pred_gap is not None and succ_gap is not None:
-                            if DUAL_PULSE_INTEGRATION == "B2":
-                                # FULL cancel: feedback sees ~0 on-plan (NO double-drive),
-                                # so the direct feedforward is the SOLE driver.
-                                succ_gap_used = max(1e-3, float(succ_gap) + (s_succ - s_self))
-                                pred_gap_used = max(1e-3, float(pred_gap) - (s_pred - s_self))
-                            else:
-                                # "B" minimal cancel: feedback sees ~2*s_self (mild double-drive).
-                                succ_gap_used = max(1e-3, float(succ_gap) + s_succ)
-                                pred_gap_used = max(1e-3, float(pred_gap) - s_pred)
+                            pred_gap_used, succ_gap_used = self._compute_cancelling_bias(
+                                DUAL_PULSE_INTEGRATION,
+                                pred_gap, succ_gap, s_self, s_pred, s_succ,
+                            )
                         dp_ff_shift = s_self
 
                 # Physical (unshifted) e_tau — for telemetry analysis only.
@@ -1241,16 +1286,13 @@ class AgentProtocol(IProtocol):
                 # shift (closed loop on shift_remaining -> ~exp decay with time const T_FF).
                 self._last_ff_dtheta_for_consume = 0.0   # M8: reset; set below if the FF acts
                 if dp_ff_shift != 0.0 and DUAL_PULSE_T_FF > 0.0 and math.isfinite(r_eff) and r_eff > 0.0:
-                    v_ff_scalar = (float(dp_ff_shift) / float(DUAL_PULSE_T_FF)) * float(r_eff)
-                    if v_ff_scalar > float(VM_MAX_SPEED_XY):
-                        v_ff_scalar = float(VM_MAX_SPEED_XY)
-                    elif v_ff_scalar < -float(VM_MAX_SPEED_XY):
-                        v_ff_scalar = -float(VM_MAX_SPEED_XY)
-                    # M8: commanded redistribution rotation (v_ff/r * dt), already clipped by
-                    # saturation; consumed on the next tick (instead of the measured Δθ) when the flag is on.
-                    self._last_ff_dtheta_for_consume = (
-                        (v_ff_scalar / float(r_eff)) * float(self.control_period)
+                    v_ff_scalar, ff_dtheta = self._compute_ff_command(
+                        dp_ff_shift, DUAL_PULSE_T_FF, r_eff,
+                        VM_MAX_SPEED_XY, self.control_period,
                     )
+                    # M8: the commanded redistribution rotation (saturation-clipped) is
+                    # consumed on the NEXT tick instead of the measured Δθ when the flag is on.
+                    self._last_ff_dtheta_for_consume = ff_dtheta
                     v_tau = (
                         v_tau[0] + v_ff_scalar * t_hat[0],
                         v_tau[1] + v_ff_scalar * t_hat[1],
