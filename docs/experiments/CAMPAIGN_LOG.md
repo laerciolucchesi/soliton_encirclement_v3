@@ -500,3 +500,70 @@ flagged as out of scope. Front 4 CLOSED (negative-becomes-data: measured before
 building, avoided an unnecessary mechanism). Methodology note: `sat_frac` is the
 right discriminator and is now exercised; the effort 2× alone is not evidence of
 pathology.
+
+## 2026-07-26 — P0: provenance (seed + git hash + full param set in every row)
+Problem, not hypothesis: the main campaign's result CSVs were produced from an
+**uncommitted working tree** (2026-05-30 → 2026-06-06) and record neither the
+seed, nor the code version, nor the parameters pinned for the run. The defaults
+they silently inherited have since moved (`CONTROL_PERIOD` 0.01→0.05,
+`AGENT_STATE_TIMEOUT` 5·dt→max(20·dt, 0.2), `DUAL_PULSE_CONSUME_FF_ONLY` and
+`DUAL_PULSE_MULTIPLICITY` now default ON), so those rows cannot be re-derived.
+
+Commands (git `fc08491`, clean tree at the point the changes were authored):
+```powershell
+python -m pytest -q                                    # 152 passed (before)
+python experiments/scaling_law/check_provenance.py     # inventory
+python -m pytest -q                                    # 205 passed (after)
+```
+
+**Inventory (the measurement, not a side note): 0/49 result CSVs, 765 result
+rows, carry git provenance.** 42/49 carry a `seed` column; `git_commit` and
+`git_dirty` are absent from every single file, and `figure_data.csv` — the input
+to the thesis figures (`make_figures.py`, `make_table.py`) — carries neither seed
+nor commit. Parameter coverage of the 11 key knobs ranges 0/11
+(`trackC_results*`, `mmult_adjacent_results`) to 5/11 (`collapse_results*`).
+
+What was built (no simulation behaviour touched; 152 pre-existing tests
+unchanged and still green):
+- `provenance.py` — `_git_provenance()` → (short sha, dirty), exception-safe with
+  a `("unknown", True)` fallback; `resolved_config()` reads all 99 public
+  constants off the imported `config_param` (env overrides already folded in);
+  `summary_provenance()` builds the flat row through the single mapping table
+  `SUMMARY_FROM_CONFIG`. Git state is captured ONCE, before the sim, and cached.
+- `run_manifest.json` per run directory (`main.py`, written pre-sim): argv, cwd,
+  python/platform, git (commit/branch/dirty/raw `status --porcelain`), the env
+  vars actually SET, and the complete resolved config. ~6 KB.
+- `plot_telemetry.SUMMARY_COLUMNS` extended 28 → 51 columns: `git_commit`,
+  `git_dirty`, `experiment_seed` + every pinned parameter. Assembled from the
+  resolved config, with a mismatch guard that warns instead of writing a blank
+  provenance cell. Old `runs_summary.csv` files rotate to `.bak.<ts>` (rule 2:
+  nothing deleted).
+- `config_param.METRICS_T0` and `EXPERIMENT_REPRODUCIBLE` became env-overridable
+  (defaults unchanged: 0.0 and True) — they were the two holes in rule 3.
+- `metrics_util.run_provenance(run_dir)` for the sweep runners, reading the
+  CHILD's manifest. A runner must NOT call `summary_provenance()` directly: it
+  is the parent process and its `config_param` holds the parent's defaults, not
+  the values it pinned in the child's env.
+- `experiments/scaling_law/check_provenance.py` (the audit above) and
+  `docs/experiments/PROVENANCE.md` (schema + operational rule).
+- `tests/test_provenance.py` — 53 tests (suite 152 → 205).
+
+Backward compatibility: the only schema changed is `runs_summary.csv`, whose sole
+reader is `run_sweep.py::load_completed_combos` (`csv.DictReader` + `.get()`,
+tolerant — now regression-tested). No script under `experiments/scaling_law/`
+imports `plot_telemetry` or `config_param`; `analyze_collapse.py`,
+`make_table.py` and `analyze_comm.py` were re-run unchanged as proof.
+
+**Open gap (deliberate, measured rather than papered over): the runners still do
+not stamp provenance onto their `*_results.csv` rows.** P0 provides the
+mechanism (`run_provenance(run_dir)`, one line per runner) and the audit that
+quantifies the debt; adopting it is P1+ work. Until then `check_provenance.py`
+will keep reporting 0/N on core provenance for any newly written result file.
+
+**Thesis impact.** Cap. 7 (metodologia/reprodutibilidade) gains a concrete
+provenance schema to describe. Every number currently cited from
+`experiments/scaling_law/*.csv` — i.e. the Cap. 3 Θ(N²) baseline, the Cap. 5/6
+B2 flat-τ and dimensionless-law results, and the Cap. 7 robustness maps — is, as
+of today, **not reproducible from its own row**. Re-running the load-bearing
+cells under the new schema (new files, old ones to `_archive/`) is the
+prerequisite for citing them as evidence rather than as history.

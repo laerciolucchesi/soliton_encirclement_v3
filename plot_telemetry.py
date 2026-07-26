@@ -40,51 +40,38 @@ import matplotlib.pyplot as plt
 
 from config_param import (
     CONTROL_PERIOD,
-    ENCIRCLEMENT_RADIUS,
-    EXPERIMENT_REPRODUCIBLE,
-    FAILURE_ENABLE,
-    FAILURE_MEAN_FAILURES_PER_MIN,
-    INIT_ANGLES_EQUIDISTANT,
-    INIT_RADIUS_RANGE,
     METRICS_E_THR,
     METRICS_MA_W_SEC,
     METRICS_SETTLE_WINDOW_SEC,
     METRICS_T0,
-    NUM_AGENTS,
-    PROTECTION_ANGLE_DEG,
-    SIM_DURATION,
-    TANGENTIAL_COMPOSITION_MODE,
-    TARGET_SWARM_OMEGA_REF,
-    TARGET_SWARM_SPIN_ENABLE,
     VM_MAX_SPEED_XY,
 )
+import provenance
 
 CSV_DEFAULT_PATH = "agent_telemetry.csv"
 SUMMARY_CSV_DEFAULT_PATH = "runs_summary.csv"
 EVENTS_CSV_DEFAULT_PATH = "events.csv"
 
-# Column order for the cross-run summary CSV. Keep stable: appending a new row to
-# an existing file with a different header would corrupt the table.
-SUMMARY_COLUMNS = [
+# Identity of the run itself: when it ran and which propagation channel it used.
+# (method/k_prop come from the environment main.py sets, not from config_param.)
+_RUN_COLUMNS = [
     "run_timestamp_iso",
     "propagation_method",
     "k_prop",
-    "composition_mode",
-    "num_agents",
-    "encirclement_radius",
-    "sim_duration",
-    "init_radius_range",
-    "init_angles_equidistant",
-    "failure_enable",
-    "failure_mean_per_min",
-    "target_swarm_spin_enable",
-    "target_swarm_omega_ref",
-    "protection_angle_deg",
-    "experiment_reproducible",
+]
+
+# Metric-window settings, taken from the MetricParams actually used to compute
+# M1..M7 rather than re-read from config_param — a caller may construct
+# MetricParams differently and the row must report what was used, not what the
+# default says. (metrics_t0 lives here for the same reason.)
+_METRIC_PARAM_COLUMNS = [
     "metrics_t0",
     "metrics_e_thr",
     "metrics_ma_w_sec",
     "metrics_settle_window_sec",
+]
+
+_METRIC_COLUMNS = [
     "M1_P95_e_pooled",
     "M2_P95_P95i",
     "M3_P95_abs_dedt",
@@ -95,6 +82,21 @@ SUMMARY_COLUMNS = [
     "M7_settle_P95",
     "M7_settled_frac",
 ]
+
+# Column order for the cross-run summary CSV. Keep stable: appending a new row to
+# an existing file with a different header would corrupt the table (see the
+# rotation guard in append_run_summary).
+#
+# provenance.PROVENANCE_COLUMNS supplies git_commit / git_dirty / experiment_seed
+# plus every pinned parameter, read from the RESOLVED config_param module at run
+# time. Adding a parameter to the row = one entry in provenance.SUMMARY_FROM_CONFIG;
+# there is no second table of literal values here that could drift from it.
+SUMMARY_COLUMNS = (
+    _RUN_COLUMNS
+    + list(provenance.PROVENANCE_COLUMNS)
+    + _METRIC_PARAM_COLUMNS
+    + _METRIC_COLUMNS
+)
 
 
 @dataclass
@@ -681,11 +683,14 @@ def _load_events_csv(path: str) -> Optional[pd.DataFrame]:
 
 
 def _collect_run_context() -> Dict[str, object]:
-    """Snapshot the configuration that defines this run.
+    """Snapshot everything that defines this run: provenance + resolved parameters.
 
-    Pulls the propagation method/gain from environment variables (set by main.py
-    before the simulation starts) and reads the rest from `config_param`. Used as
-    the context portion of each row appended to the cross-run summary CSV.
+    The propagation method/gain come from the environment variables main.py sets
+    before the simulation starts; everything else comes from
+    `provenance.summary_provenance()`, which reads the RESOLVED `config_param`
+    module (env overrides already folded in) plus the git state captured before
+    the run. Used as the context portion of each row appended to the cross-run
+    summary CSV, and printed at the end of the run.
     """
     method = os.environ.get("PROPAGATION_METHOD", "")
     try:
@@ -693,22 +698,12 @@ def _collect_run_context() -> Dict[str, object]:
     except ValueError:
         k_prop = float("nan")
 
-    return {
+    context: Dict[str, object] = {
         "propagation_method": method,
         "k_prop": k_prop,
-        "composition_mode": str(TANGENTIAL_COMPOSITION_MODE),
-        "num_agents": int(NUM_AGENTS),
-        "encirclement_radius": float(ENCIRCLEMENT_RADIUS),
-        "sim_duration": float(SIM_DURATION),
-        "init_radius_range": float(INIT_RADIUS_RANGE),
-        "init_angles_equidistant": bool(INIT_ANGLES_EQUIDISTANT),
-        "failure_enable": bool(FAILURE_ENABLE),
-        "failure_mean_per_min": float(FAILURE_MEAN_FAILURES_PER_MIN),
-        "target_swarm_spin_enable": bool(TARGET_SWARM_SPIN_ENABLE),
-        "target_swarm_omega_ref": float(TARGET_SWARM_OMEGA_REF),
-        "protection_angle_deg": float(PROTECTION_ANGLE_DEG),
-        "experiment_reproducible": bool(EXPERIMENT_REPRODUCIBLE),
     }
+    context.update(provenance.summary_provenance())
+    return context
 
 
 def append_run_summary(
@@ -725,36 +720,37 @@ def append_run_summary(
     if run_context is None:
         run_context = _collect_run_context()
 
-    row = {
+    row: Dict[str, object] = {
         "run_timestamp_iso": datetime.now().isoformat(timespec="seconds"),
-        "propagation_method": run_context.get("propagation_method", ""),
-        "k_prop": run_context.get("k_prop", float("nan")),
-        "composition_mode": run_context.get("composition_mode", ""),
-        "num_agents": run_context.get("num_agents", ""),
-        "encirclement_radius": run_context.get("encirclement_radius", ""),
-        "sim_duration": run_context.get("sim_duration", ""),
-        "init_radius_range": run_context.get("init_radius_range", ""),
-        "init_angles_equidistant": run_context.get("init_angles_equidistant", ""),
-        "failure_enable": run_context.get("failure_enable", ""),
-        "failure_mean_per_min": run_context.get("failure_mean_per_min", ""),
-        "target_swarm_spin_enable": run_context.get("target_swarm_spin_enable", ""),
-        "target_swarm_omega_ref": run_context.get("target_swarm_omega_ref", ""),
-        "protection_angle_deg": run_context.get("protection_angle_deg", ""),
-        "experiment_reproducible": run_context.get("experiment_reproducible", ""),
         "metrics_t0": params.t0,
         "metrics_e_thr": params.e_thr,
         "metrics_ma_w_sec": params.ma_w,
         "metrics_settle_window_sec": params.settle_window,
-        "M1_P95_e_pooled": metrics.get("M1_P95_e_pooled", float("nan")),
-        "M2_P95_P95i": metrics.get("M2_P95_P95i", float("nan")),
-        "M3_P95_abs_dedt": metrics.get("M3_P95_abs_dedt", float("nan")),
-        "M4_RMS_osc": metrics.get("M4_RMS_osc", float("nan")),
-        "M5_mean_v2": metrics.get("M5_mean_v2", float("nan")),
-        "M6_Pr_sat": metrics.get("M6_Pr_sat", float("nan")),
-        "M7_settle_median": metrics.get("M7_settle_median", float("nan")),
-        "M7_settle_P95": metrics.get("M7_settle_P95", float("nan")),
-        "M7_settled_frac": metrics.get("M7_settled_frac", float("nan")),
     }
+    # Run identity + provenance + every pinned parameter, straight from the
+    # resolved context (no second literal table to drift out of sync).
+    for column in _RUN_COLUMNS:
+        if column in run_context:
+            row[column] = run_context[column]
+    for column in provenance.PROVENANCE_COLUMNS:
+        row[column] = run_context.get(column, "")
+    for column in _METRIC_COLUMNS:
+        row[column] = metrics.get(column, float("nan"))
+
+    # Guard against a column being declared but never populated (or vice versa):
+    # a silently blank provenance cell is exactly the failure mode this schema
+    # exists to prevent, so say so loudly instead of writing an empty column.
+    missing = [c for c in SUMMARY_COLUMNS if c not in row]
+    extra = [c for c in row if c not in SUMMARY_COLUMNS]
+    if missing or extra:
+        print(
+            f"[runs_summary] WARNING: schema mismatch — missing={missing} extra={extra}. "
+            f"Check plot_telemetry.SUMMARY_COLUMNS against provenance.SUMMARY_FROM_CONFIG."
+        )
+        for column in missing:
+            row[column] = ""
+        for column in extra:
+            row.pop(column, None)
 
     existing_header = _read_existing_header(summary_csv_path)
     if existing_header is not None and existing_header != SUMMARY_COLUMNS:
@@ -777,6 +773,12 @@ def append_run_summary(
         writer.writerow(row)
 
     print(f"\n[runs_summary] Appended 1 row to {os.path.abspath(summary_csv_path)}")
+    print(
+        f"[runs_summary] provenance: commit={row.get('git_commit')} "
+        f"dirty={row.get('git_dirty')} seed={row.get('experiment_seed')} "
+        f"| N={row.get('num_agents')} dt={row.get('control_period')} "
+        f"K_E_TAU={row.get('k_e_tau')} integration={row.get('dual_pulse_integration')}"
+    )
 
 
 def _read_existing_header(csv_path: str) -> Optional[list]:

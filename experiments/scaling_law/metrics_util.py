@@ -12,6 +12,7 @@ fim -> t_settle = inf (= nao assentou). tau_fit fica como SECUNDARIO (taxa/forma
 com R2 alto). Para churn continuo (sem assentamento) use egap_avg.
 """
 import os
+import sys
 
 import numpy as np
 
@@ -170,6 +171,30 @@ def effort_metrics(agent_csv, t0=0.0, vmax=10.0):
         if per_node.size:
             out["fairness_p95"] = float(np.percentile(per_node, 95))
     return out
+
+
+def run_provenance(run_dir):
+    """Colunas de proveniencia (git + parametros fixados) de UMA celula do sweep.
+
+    Le o run_manifest.json que o main.py escreveu DENTRO de run_dir -- ou seja, o
+    estado resolvido do processo FILHO. Nunca chame provenance.summary_provenance()
+    direto de um runner: o runner e' o processo PAI e o config_param dele carrega os
+    defaults do pai, nao o env fixado para o filho.
+
+    Uso no runner (regra 5 da campanha: toda linha carrega seed/commit/dirty):
+        m.update(run_provenance(run_dir))
+
+    Retorna {} se o manifesto nao existir (rodada antiga / main.py sem proveniencia),
+    para que "nao registrado" seja distinguivel de "registrado como default".
+    """
+    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+    try:
+        import provenance
+    except Exception:
+        return {}
+    return provenance.summary_from_manifest(provenance.read_run_manifest(run_dir))
 
 
 def aggregate_seeds(values):

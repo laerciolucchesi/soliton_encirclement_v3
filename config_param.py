@@ -60,7 +60,12 @@ SIM_DEBUG: bool = False             # Enable simulator debug mode
 # If True, all randomness (initialization, target/adversary motion, agent failures, etc.)
 # will be seeded deterministically for fully reproducible experiments.
 # If False, all random draws will be non-deterministic (true randomness).
-EXPERIMENT_REPRODUCIBLE: bool = True
+# Env-overridable (campaign rule 3: every relevant parameter must be pinnable in
+# the child process env instead of relying on this default). Default unchanged.
+EXPERIMENT_REPRODUCIBLE: bool = (
+    _os.environ.get("EXPERIMENT_REPRODUCIBLE", "True").strip().lower()
+    in ("true", "1", "yes", "y")
+)
 
 # --------------------------------------------------------------------------------------
 # 2) Communication + visualization (medium + UI)
@@ -759,7 +764,12 @@ TARGET_SWARM_SPIN_RHO_MIN: float = 0.05
 
 # METRICS_T0: start time (s) of the "regime" window for M1..M6.
 # Example: METRICS_T0=10 means "ignore the first 10 seconds" when computing the regime metrics.
-METRICS_T0: float = 0.0
+# Env-overridable (campaign rule 3: sweeps pin the metric window explicitly in the
+# child env rather than relying on this default). Default unchanged.
+try:
+    METRICS_T0: float = float(_os.environ.get("METRICS_T0", "0.0"))
+except ValueError:
+    METRICS_T0 = 0.0
 
 # METRICS_E_THR: absolute error threshold for settling time M7, using e(t)=|e_tau(t)|.
 # Choose a value that is meaningful in your normalized e_tau scale (often 0.01~0.05).

@@ -30,6 +30,7 @@ from gradysim.simulator.simulation import SimulationBuilder, SimulationConfigura
 from protocol_target import TargetProtocol  # noqa: E402
 from protocol_agent import AgentProtocol  # noqa: E402
 from protocol_adversary import AdversaryProtocol  # noqa: E402
+import provenance  # noqa: E402
 from velocity_mobility import VelocityMobilityHandler, VelocityMobilityConfiguration  # noqa: E402
 from config_param import (  # noqa: E402
     COMMUNICATION_DELAY,
@@ -158,6 +159,21 @@ def main():
         except ValueError:
             _seed = 0
         random.seed(_seed)
+
+    # Write the run manifest BEFORE the simulation starts. Two reasons:
+    #   1) it snapshots argv + the complete resolved config_param + git state, so
+    #      the run stays reproducible even if the summary CSV is lost or edited;
+    #   2) it primes provenance's git cache with the PRE-run tree state, so the
+    #      run's own output files cannot later make the code look uncommitted.
+    manifest_path = provenance.write_run_manifest()
+    _commit, _dirty = provenance.git_provenance()
+    if manifest_path:
+        print(f"[provenance] commit={_commit} dirty={_dirty} -> {manifest_path}")
+    if _dirty:
+        print(
+            "[provenance] WARNING: working tree is DIRTY — this run is not "
+            "reproducible from the recorded commit alone."
+        )
 
     # Create a shared CSV file for agent telemetry logs.
     csv_path = os.path.join(os.getcwd(), "agent_telemetry.csv")

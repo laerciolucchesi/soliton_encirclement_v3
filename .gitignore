@@ -51,7 +51,9 @@ events.csv
 events_*.csv
 dual_pulse_messages*.csv
 runs_summary*.csv
+runs_summary.csv.bak.*
 telemetry_*.csv
+run_manifest.json
 
 # --- Figures / PNGs (regenerated from *_results.csv by the analyze_*.py scripts) ---
 *.png
