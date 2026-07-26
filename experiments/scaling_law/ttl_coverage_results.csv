@@ -1,0 +1,9 @@
+N,mode,ttl,coverage_frac,agents_total,agents_with_shift
+40,TTL=50 (fixo),50,0.95,40,38
+40,TTL=3N (adequado),120,0.95,40,38
+50,TTL=50 (fixo),50,0.96,50,48
+50,TTL=3N (adequado),150,0.96,50,48
+75,TTL=50 (fixo),50,0.36,75,27
+75,TTL=3N (adequado),225,0.9866666666666667,75,74
+100,TTL=50 (fixo),50,0.01,100,1
+100,TTL=3N (adequado),300,0.98,100,98
