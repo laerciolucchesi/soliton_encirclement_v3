@@ -288,6 +288,12 @@ def git_provenance_early():
     Se capturado depois, os proprios arquivos que este script escreve deixam a
     arvore suja e a linha registraria dirty=True para sempre (auto-referencia).
     Mesmo motivo pelo qual main.py escreve o manifesto antes da simulacao.
+
+    NOTA sobre o hash gravado: commitar o CSV de saida avanca o HEAD, entao uma
+    re-rodada logo depois grava um hash UM COMMIT a frente do que esta no arquivo
+    versionado. Isso e' esperado, nao defeito -- os dois commits diferem apenas
+    pelo conteudo do proprio CSV. O que a coluna afirma e' "qual versao do CODIGO
+    produziu esta linha", e essa afirmacao continua correta.
     """
     try:
         sys.path.insert(0, os.path.dirname(os.path.dirname(EXP_DIR)))
