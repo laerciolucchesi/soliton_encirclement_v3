@@ -27,7 +27,7 @@ from gradysim.simulator.handler.communication import CommunicationHandler, Commu
 from gradysim.simulator.handler.timer import TimerHandler  # noqa: E402
 from gradysim.simulator.handler.visualization import VisualizationHandler, VisualizationConfiguration  # noqa: E402
 from gradysim.simulator.simulation import SimulationBuilder, SimulationConfiguration  # noqa: E402
-from protocol_target import TargetProtocol  # noqa: E402
+from protocol_target import TARGET_TELEMETRY_COLUMNS, TargetProtocol  # noqa: E402
 from protocol_agent import AgentProtocol  # noqa: E402
 from protocol_adversary import AdversaryProtocol  # noqa: E402
 import provenance  # noqa: E402
@@ -190,7 +190,7 @@ def main():
     target_csv_path = os.path.join(os.getcwd(), "target_telemetry.csv")
     os.environ["TARGET_LOG_CSV_PATH"] = target_csv_path
     with open(target_csv_path, "w", encoding="utf-8") as f:
-        f.write("timestamp,E_r,E_vr,rho,G_max,E_gap\n")
+        f.write(",".join(TARGET_TELEMETRY_COLUMNS) + "\n")
 
     # Sparse event log for the fast soliton-like channel observations.
     # Each agent appends rows in finish(); we wipe the file so each run is fresh.

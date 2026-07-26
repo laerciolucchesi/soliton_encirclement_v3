@@ -373,8 +373,18 @@ mislead downstream plots — better to drop than to lie.
 `target_telemetry.csv` columns (written by `TargetProtocol.finish()`):
 
 ```
-timestamp, E_r, E_vr, rho, G_max, E_gap
+timestamp, E_r, E_vr, rho, G_max, E_gap, alive_count, gap_max_rad
 ```
+
+Notes:
+- `G_max` and `E_gap` are both normalized by `2*pi/M` with **M = alive agents at
+  that instant**, so they measure *redistribution quality*, not *absolute
+  coverage*: a half-dead ring spread perfectly scores `G_max = 1` exactly like a
+  full one.
+- `alive_count` (= M) and `gap_max_rad` (= `G_max * 2*pi/M`, the largest gap in
+  radians) were added 2026-07-26 so the dimensionless metrics can be converted
+  back to physical angles. `gap_max_rad * ENCIRCLEMENT_RADIUS` is the breach arc
+  length. Runs predating that date lack both columns — read them tolerantly.
 
 `events.csv` schema (extended for v1.7):
 

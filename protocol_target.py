@@ -46,6 +46,15 @@ from protocol_messages import AdversaryState, AgentState, TargetState
 from controllers import WrappedAnglePDController
 
 
+# Single source of truth for the target telemetry schema. main.py writes the
+# header from this tuple and TargetProtocol.finish() appends rows in this order;
+# keeping one definition is what stops the two from drifting apart.
+TARGET_TELEMETRY_COLUMNS = (
+    "timestamp", "E_r", "E_vr", "rho", "G_max", "E_gap",
+    "alive_count", "gap_max_rad",
+)
+
+
 class TargetProtocol(IProtocol):
     """Implementation of target protocol."""
 
@@ -587,6 +596,15 @@ class TargetProtocol(IProtocol):
         #   rho   : Kuramoto order parameter in [0, 1]
         #   G_max : max_k (Delta theta_k / (2*pi/M)) using M = alive agents (dimensionless)
         #   E_gap : RMS normalized angular spacing error (dimensionless)
+        # plus two ABSOLUTE-scale columns (added 2026-07-26, campaign E4):
+        #   alive_count : the M used as the normalizer above (agents with a usable
+        #                 position this tick). Without it the dimensionless metrics
+        #                 cannot be converted back to physical angles: a half-dead
+        #                 ring spread perfectly scores G_max = 1 exactly like a full
+        #                 one, and the two are indistinguishable in the CSV.
+        #   gap_max_rad : the largest angular gap in RADIANS (= G_max * 2*pi/M).
+        #                 This is the mission-critical "breach window"; arc length
+        #                 at the encirclement radius is gap_max_rad * R.
 
         two_pi = 2.0 * math.pi
         R = float(ENCIRCLEMENT_RADIUS)
@@ -657,10 +675,12 @@ class TargetProtocol(IProtocol):
         M = len(angles)
         G_max = 0.0
         E_gap = 0.0
+        gap_max_rad = 0.0
         if M > 0:
             ideal_gap = two_pi / float(M)
             if math.isfinite(ideal_gap) and ideal_gap > 0.0:
                 max_ratio = 0.0
+                max_gap = 0.0
                 sum_sq_gap = 0.0
                 count_gap = 0
                 for i in range(M):
@@ -677,6 +697,7 @@ class TargetProtocol(IProtocol):
                     if math.isfinite(ratio):
                         if ratio > max_ratio:
                             max_ratio = ratio
+                            max_gap = gap
                         e_gap = ratio - 1.0
                         if math.isfinite(e_gap):
                             sum_sq_gap += e_gap * e_gap
@@ -684,6 +705,7 @@ class TargetProtocol(IProtocol):
 
                 G_max = float(max_ratio) if count_gap > 0 else 0.0
                 E_gap = float(math.sqrt(sum_sq_gap / count_gap)) if count_gap > 0 else 0.0
+                gap_max_rad = float(max_gap) if count_gap > 0 else 0.0
 
         self._telemetry_rows.append(
             {
@@ -693,6 +715,8 @@ class TargetProtocol(IProtocol):
                 "rho": rho,
                 "G_max": G_max,
                 "E_gap": E_gap,
+                "alive_count": int(M),
+                "gap_max_rad": gap_max_rad,
             }
         )
 
@@ -703,7 +727,7 @@ class TargetProtocol(IProtocol):
         try:
             df = pd.DataFrame(
                 self._telemetry_rows,
-                columns=["timestamp", "E_r", "E_vr", "rho", "G_max", "E_gap"],
+                columns=list(TARGET_TELEMETRY_COLUMNS),
             )
 
             # Append without header; main.py already created the file with header.
