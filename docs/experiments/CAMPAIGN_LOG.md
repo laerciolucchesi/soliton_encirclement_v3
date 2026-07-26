@@ -567,3 +567,96 @@ B2 flat-τ and dimensionless-law results, and the Cap. 7 robustness maps — is,
 of today, **not reproducible from its own row**. Re-running the load-bearing
 cells under the new schema (new files, old ones to `_archive/`) is the
 prerequisite for citing them as evidence rather than as history.
+
+## 2026-07-26 — P1/E4: churn re-analysed pairwise, every metric (no new simulation)
+Question: the introduction argues the MAXIMUM ANGULAR GAP is the mission-critical
+quantity, but churn robustness was reported on the MEAN spacing error. What do
+the other already-collected metrics say?
+
+Commands (git `a6f3099`, clean tree; analysis only, zero simulations):
+```powershell
+python experiments/scaling_law/analyze_churn_paired.py    # + churn_paired_results.csv + figure
+python experiments/scaling_law/probe_gmax_floor.py        # + gmax_probe_results.csv
+```
+Full report: [CHURN_PAIRED.md](CHURN_PAIRED.md). First statistical test in this
+repository (paired Wilcoxon; `scipy>=1.11` added to requirements/pyproject).
+
+**Semantics first — two findings that reframe the question.**
+1. `egap_max` is **not** the maximum angular gap. `E_gap` is the RMS ACROSS THE
+   RING of the relative gap error (`protocol_target.py:686`); `egap_max` is the
+   MAX OVER TIME of that spatial RMS, over t ∈ [20 s, 155 s]
+   (`run_churn_sweep.py:47-56` — a runner-local helper, NOT `metrics_util`). Two
+   aggregations stacked: an average that hides one wide gap among 23 narrow ones,
+   then an extreme-value pick over ~2700 samples.
+2. The real maximum gap is **`G_max`** (`protocol_target.py:685`), written to every
+   `target_telemetry.csv` since forever and **never aggregated by any churn
+   analysis**. Both it and `E_gap` are normalised by the ALIVE count, so a
+   half-dead ring spread perfectly scores `G_max = 1`; the absolute breach in
+   radians is `G_max·2π/M` and **M is not logged**, so it is not recoverable from
+   the 765 existing result rows. One-line instrumentation gap (`alive_count`,
+   ideally `gap_max_rad`) — blocking for any breach-window claim.
+   Related: `egap_avg` means DIFFERENT windows in churn CSVs (t≥20 s) vs
+   collapse/trackC CSVs (`metrics_util.py:119`, t≥15 s). Not comparable across
+   campaigns without naming the runner.
+
+**Paired results** (`c3_churn8_dt05`, 32 pairs by (rate, seed) — same Poisson
+stream, since baseline and B2 share `EXPERIMENT_SEED`):
+- `egap_avg`  adv 1.19 [1.11, 1.34], **0/32 losses**, p < 0.001, r = 0.87.
+  Reproduces §7.2.7 EXACTLY (1.31/1.23/1.15/1.14, adv_min ≥ 1.11). Verified.
+- `egap_p90`  adv 1.07 [1.00, 1.18], 1/32, p < 0.001 — and the edge GROWS with
+  rate (1.04→1.13).
+- `egap_max`  adv 1.05 [0.85, 1.46], **14/32 losses**; per-rate p = 0.945 / 0.250 /
+  0.016 / 0.742 — only rate 24 is individually significant. **No reliable effect.**
+- `fairness_p95` adv 1.00 [0.57, 1.63], **15/32**, p = 0.73, r = 0.06. **Null.**
+- `sat_frac`  identically 0.0 in all 64 cells (test undefined) — confirms the
+  2026-06-13 anti-windup diagnosis on 8 seeds.
+- `effort_mean_v2` cost 2.41× [1.74, 3.23], **32/32**, p < 0.001. Sharpens the
+  logged "~2.2–2.7×" into a characterised interval.
+
+**The pattern is not specific to c3** (Task 3). In all four churn campaigns the
+`egap_max` advantage is far smaller than `egap_avg`'s and always has losing pairs
+where `egap_avg` has none: c3 1.19(0/32) vs 1.05(14/32); m8off_8seed 1.15(11/32)
+vs 1.04(10/32); c1B_m8on_dt01 1.28(0/12) vs 1.13(3/12); c1C_dt05 1.16(0/6) vs
+**0.98(5/6)**. The ordering never inverts.
+
+**Mechanism (hypothesis, with in-data support).** `egap_max` is set by the INSTANT
+of the event — pure geometry, `G_max` jumps to `2(N-1)/N = 1.92` before any
+protocol can act. `egap_avg` is set by the RECOVERY that follows (Θ(N²)≈20 s
+baseline vs ≈2 s B2) — that is where the whole advantage lives. Prediction
+confirmed in the existing data: as rate rises 6→48, `egap_avg`'s advantage FALLS
+(1.31→1.14, the baseline never settles) while `egap_p90`'s RISES (1.04→1.13, the
+upper decile becomes recovery- rather than peak-dominated); they converge to
+≈1.14. A peak-dominated metric sits outside that convergence and shows no trend.
+Sharper corollary: B2's ≈2.1 s ≈ 2·T_FF already equals the actuation-limited floor
+(max displacement ≈ r·gap/2 ≈ 2.7 m, i.e. ~2–3·tau_a of first-order lag), so the
+remaining lever on the breach window is platform agility, not coordination.
+
+**G_max probe** (`churn_sweep_runs_stamp/`, the only churn run dir whose
+`target_telemetry.csv` survived): at sparse churn the peak `G_max` is 2.11
+(baseline) / 2.03, i.e. within 10% of the protocol-independent geometric 1.917,
+climbing to ~3.5 at rate 48 as concurrent deaths merge more gaps. No `G_max`
+statistic separates the methods (p = 0.13–0.97). **BUT** — a P0-shaped caveat —
+that directory's BASELINE half matches the dt=0.01 ablation family byte-exactly
+while its B2 half matches NO committed CSV and loses on `egap_avg` (0.72). Which
+overlay variant produced it is unrecoverable. So this probe cannot decide the
+question for the validated B2; it establishes only that `G_max` is extractable at
+zero cost and that the geometric floor is a live hypothesis.
+
+**Deciding experiment proposed** (CHURN_PAIRED.md §5.3): NOT a churn sweep —
+concurrent deaths contaminate the peak. Single deterministic permanent failure,
+N=24, sweeping the KINEMATIC axes `VM_MAX_SPEED_XY ∈ {2.5,5,10,20}` ×
+`VM_TAU_XY ∈ {0.5,1,2}` × {baseline, B2} × 5 seeds = 120 runs of ~35 s. Measure
+peak `G_max`, `t_close` (time until `G_max` < 1.25 and stays), and the breach AREA
+∫max(0, G_max−1.25)dt. Decision rule in the report; the outcome that would most
+change the thesis is `t_close` flat for B2 while the baseline's grows with N —
+which would make `G_max` the headline result rather than an absent one.
+
+**Thesis impact.** Cap. 7 §7.2.7's 8/8-seed claim is VERIFIED but must name its
+metric (`egap_avg`) and gain the negative results for max and fairness; the
+`[decidir depois]` note about the unpaired table is now decidable (keep paired,
+add p-values). Cap. 9 §9.1 RQ4's "churn (vantagem pareada, 8/8 seeds)" must name
+the metric too, or a reader carries it to the max-gap claim of the introduction,
+which the data does not support; §9.2 C5 should say the map covers mean spacing
+error, not worst-case gap; §9.3 gains one honest limitation. Draft v1
+(`5-preliminary-results.tex`, `6-conclusion.tex`) could NOT be located — there is
+no `.tex` anywhere in this repo or the sibling projects.

@@ -7,3 +7,8 @@ gradysim>=0.7.0
 pandas>=2.0
 matplotlib>=3.7
 simple-pid>=2.0
+# scipy: paired Wilcoxon signed-rank test in
+# experiments/scaling_law/analyze_churn_paired.py (E4). Added 2026-07-26 — it is
+# the first statistical test in the repository; every campaign claim before it
+# rested on medians alone.
+scipy>=1.11

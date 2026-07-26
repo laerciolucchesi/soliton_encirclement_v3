@@ -30,6 +30,8 @@ dependencies = [
     "pandas>=2.0",
     "matplotlib>=3.7",
     "simple-pid>=2.0",
+    # Paired Wilcoxon signed-rank test used by the churn re-analysis (E4).
+    "scipy>=1.11",
 ]
 
 [project.optional-dependencies]
