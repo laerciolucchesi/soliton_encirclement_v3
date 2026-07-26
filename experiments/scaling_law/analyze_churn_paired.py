@@ -282,7 +282,23 @@ def make_figure(df, present, out_path):
 
 # ---------------------------------------------------------------------- main
 
+def git_provenance_early():
+    """Estado do git ANTES de escrever qualquer saida.
+
+    Se capturado depois, os proprios arquivos que este script escreve deixam a
+    arvore suja e a linha registraria dirty=True para sempre (auto-referencia).
+    Mesmo motivo pelo qual main.py escreve o manifesto antes da simulacao.
+    """
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.dirname(EXP_DIR)))
+        import provenance
+        return provenance.git_provenance()
+    except Exception:
+        return "unknown", True
+
+
 def main():
+    commit, dirty = git_provenance_early()
     df = load(SRC_CSV)
     if df is None:
         sys.exit(f"CSV nao encontrado: {SRC_CSV}")
@@ -308,12 +324,6 @@ def main():
     # ESTE processo (o script de analise), nao a das simulacoes-fonte -- as rodadas
     # originais sao anteriores ao P0 e nao tem manifesto (ver check_provenance.py).
     out.insert(0, "source_csv", SRC_CSV)
-    try:
-        sys.path.insert(0, os.path.dirname(os.path.dirname(EXP_DIR)))
-        import provenance
-        commit, dirty = provenance.git_provenance()
-    except Exception:
-        commit, dirty = "unknown", True
     out.insert(1, "analysis_git_commit", commit)
     out.insert(2, "analysis_git_dirty", bool(dirty))
 
