@@ -323,14 +323,57 @@ closely enough that a protocol-independent floor is a live hypothesis rather tha
   spatial RMS, not a maximum gap, and shows no overlay advantage.* This is exactly the kind
   of limitation §9.3 already handles well.
 
-### 4.3 Draft v1 (`5-preliminary-results.tex`, `6-conclusion.tex`) — not found
+### 4.3 Draft v1 — `…\00 Disciplinas\19-Proposta de Tese\draft v1\`
 
-There is **no `.tex` file anywhere** in this repository, nor in the sibling projects
-(`../soliton_encirclement`, `../soliton_encirclement_v2`, `../SolitonSwarm`). Draft v1 lives
-somewhere outside this workspace, so the corresponding edits could not be located. The v2
-edits above are the same in substance; apply them to the v1 §robustez and §C5 by hand.
+**`1-introduction.tex:93-100`, `\section{Metrics (from CS, not from control)}`.** The declared
+metrics are settling time, message complexity, event coverage and scalability. **The maximum
+angular gap is not among them** — although §Motivation (`:25-27`) calls it *the* mission-critical
+quantity. That is the structural origin of the whole problem: the introduction promises a metric
+the evaluation never defines or reports. Add it, defined **absolutely** (the perimeter-defense
+condition the same paragraph cites is on absolute spacing, `:31-33`), not normalised by the alive
+count.
 
-### 4.4 Instrumentation (blocking, one line)
+**`5-preliminary-results.tex:125-129`, `\item[Churn.]`** — *"the overlay helps under churn (paired
+advantage 1,14–1,31, 8/8 seeds)"*. Verified exactly, but the sentence never says **which metric**;
+it holds for `egap_avg` only. Suggested replacement:
+
+> With the clean (local-freshness) trigger, the overlay helps under churn on the **mean spacing
+> error**: paired advantage 1,14–1,31 per rate, 32/32 pairs, *p* < 0,001 (Wilcoxon signed-rank,
+> *r* = 0,87). The improvement is metric-dependent: the upper decile improves less (1,07, though
+> the edge grows with churn rate, 1,04→1,13), while the **maximum** and the **fairness** show no
+> reliable effect (14/32 and 15/32 pairs where the overlay is worse; *p* = 0,73 for fairness).
+
+**`5-preliminary-results.tex:138-140`** — *"the overlay spends ~2× the control effort under churn,
+and the churn gain is moderate (~1,1–1,3×)"* → **2,41×** median, [1,74; 3,23], 32/32 pairs,
+*p* < 0,001. Worth adding that `sat_frac` = 0 in all 64 cells, so the extra effort is not
+saturation.
+
+**`5-preliminary-results.tex`, new paragraph** (or `3-metodology.tex` §Analysis): the metric
+semantics of §0.4 — `E_gap` is an RMS **across the ring**, normalised by the **alive** count, so a
+half-dead ring spread perfectly scores identically to a full one.
+
+**`6-conclusion.tex:22-25`, RQ4** — *"churn (paired, 8/8 seeds)"* → name the metric, same reason.
+
+**`6-conclusion.tex:47-48`, C5** — survives and is *strengthened* by `sat_frac` = 0 and fairness
+ratio 1,00 (no harm done); but state what the map covers: mean spacing error, not worst-case gap.
+
+**`6-conclusion.tex:54-60`, Honest limitations** — add the unmeasured mission-critical quantity.
+
+### 4.4 The two claims that the deciding experiment then refuted
+
+Both live in draft v1 and both are now measured — see **[BREACH_WINDOW.md](BREACH_WINDOW.md)**:
+
+* **`1-introduction.tex:26`** — *"the reconfiguration time is exactly how long that gap stays
+  open"*. **Refuted**: 3,15 s vs 35,15 s for the baseline, a factor of **11,2×** (140 runs).
+* **`1-introduction.tex:36-37`** and **`6-conclusion.tex:65-68`** — *"the breach window grows with
+  the square of the swarm size, at N=100 it stretches to minutes"*. **Refuted**: the fitted
+  exponent is **0,31** (threshold 1,25) / **0,64** (threshold 1,10), extrapolating to 4,7 s / 18,2 s
+  at N=100 — and the breach *width* **shrinks** with N (60,1° → 30,0° → 15,1° at N = 12/24/48).
+
+`BREACH_WINDOW.md` §5 proposes the reframing the data does support, and §6 the one experiment
+that would close it.
+
+### 4.5 Instrumentation (blocking, one line) — DONE, commit `e062eed`
 
 `target_telemetry.csv` carries `G_max` but **not the alive count**, so the absolute maximum
 gap in radians (`G_max · 2π/M`) is not recoverable — including from the 765 result rows
@@ -343,6 +386,14 @@ the added column (they all select by name, so they will).
 ---
 
 ## 5. Mechanistic hypothesis and the experiment that decides it
+
+> **Status: the experiment was run.** 140 runs, zero failures — results and verdict in
+> **[BREACH_WINDOW.md](BREACH_WINDOW.md)**. The conjecture is confirmed in substance (the breach
+> window is actuation-limited: it scales with `tau_a`, is flat in `Vmax` across an 8× range, and
+> the peak matches the geometric floor to 4 decimals), with one qualification the pre-registered
+> rule did not anticipate: coordination is not irrelevant, the overlay wins 60/60 pairs by
+> 1,28–1,42×. The section below is kept as written — it is the pre-registration the verdict is
+> scored against.
 
 ### 5.1 The conjecture, restated
 

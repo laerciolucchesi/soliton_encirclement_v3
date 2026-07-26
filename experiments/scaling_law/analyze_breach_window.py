@@ -124,6 +124,71 @@ def _table(df, metric, label, by, values, fixed=None):
     return rows
 
 
+def a1_reconfiguration_vs_breach():
+    """Is the reconfiguration time REALLY 'how long the gap stays open'?
+
+    draft v1 (1-introduction.tex:26) asserts an identity between two quantities the
+    simulator computes differently:
+      t_settle / tau : fitted on E_gap  = RMS ACROSS THE RING of relative gap error
+      t_close        : when G_max (the MAX gap) drops back under the threshold
+    Both come from the same target_telemetry.csv, so this re-reads the breach runs
+    without simulating anything. Returns a DataFrame (empty if the run dirs are gone
+    -- they are gitignored, so this only works on the machine that ran the sweep).
+    """
+    sys.path.insert(0, EXP_DIR)
+    from metrics_util import event_metrics
+
+    rows = []
+    for run_dir in sorted(glob.glob(os.path.join(EXP_DIR, "breach_runs_*", "*"))):
+        tgt = os.path.join(run_dir, "target_telemetry.csv")
+        if not os.path.exists(tgt):
+            continue
+        name = os.path.basename(run_dir)
+        try:
+            d = pd.read_csv(tgt, usecols=["timestamp", "E_gap", "G_max"])
+        except Exception:
+            continue
+        t_fail = 5.0
+        ev = os.path.join(run_dir, "events.csv")
+        if os.path.exists(ev):
+            try:
+                e = pd.read_csv(ev)
+                f = e[e["event_type"] == "failure_start"]
+                if len(f):
+                    t_fail = float(f["timestamp"].min())
+            except Exception:
+                pass
+        post = d[d["timestamp"] >= t_fail].reset_index(drop=True)
+        if len(post) < 10:
+            continue
+        t = post["timestamp"].to_numpy(float)
+        g = post["G_max"].to_numpy(float)
+        m = event_metrics(d, t_fail)
+        above = g > 1.25
+        if not above.any():
+            tc = 0.0
+        else:
+            last = int(np.max(np.where(above)[0]))
+            tc = float("inf") if last >= g.size - 1 else float(t[last + 1] - t[0])
+        rows.append({
+            "run": name,
+            "method": "B2" if name.startswith("dual_pulse") else "baseline",
+            "t_close_125": tc,
+            "t_settle_egap": m.get("t_settle", np.nan),
+            "tau_fit_egap": m.get("tau_fit", np.nan),
+        })
+    return pd.DataFrame(rows)
+
+
+def loglog_slope(x, y):
+    """Exponent p of y ~ x^p. The claim under test is p ~ 2 (Theta(N^2))."""
+    x = np.asarray(x, float); y = np.asarray(y, float)
+    ok = np.isfinite(x) & np.isfinite(y) & (x > 0) & (y > 0)
+    if ok.sum() < 2:
+        return float("nan")
+    return float(np.polyfit(np.log(x[ok]), np.log(y[ok]), 1)[0])
+
+
 def make_figure(df, out_path):
     import matplotlib
     matplotlib.use("Agg")
@@ -141,10 +206,14 @@ def make_figure(df, out_path):
 
     # (a) pico G_max vs Vmax -- deve ser PLANO e identico nos dois se o piso for geometrico
     ax = axes[0, 0]
-    for meth, c in (("baseline", C_BASE), ("B2", C_B2)):
+    # The two curves coincide to 4 decimals, so the second would hide the first:
+    # draw the baseline as a wide hollow ring and B2 as a small filled dot inside.
+    for meth, c, ms, mfc, lw in (("baseline", C_BASE, 13, "none", 2.6),
+                                 ("B2", C_B2, 6, C_B2, 1.4)):
         med = [main[(main.method == meth) & (main.vmax == v)]["gmax_peak"].median()
                for v in vmaxes]
-        ax.plot(vmaxes, med, "o-", color=c, label=meth, lw=2)
+        ax.plot(vmaxes, med, "o-", color=c, label=meth, lw=lw,
+                markersize=ms, markerfacecolor=mfc, markeredgewidth=2.2)
     n0 = 24
     ax.axhline(2.0 * (n0 - 1) / n0, color="black", ls="--", lw=1.4,
                label=f"geometria 2(N-1)/N = {2.0*(n0-1)/n0:.3f}")
@@ -236,14 +305,44 @@ def main():
 
     sub = df[(df.vmax == 10.0) & (df.tau_xy == 1.0)]
     if sub.N.nunique() > 1:
-        print(f"\n=== 3. ESCALA EM N (Vmax=10, tau_a=1.0) — o teste do 'aberta por minutos' ===")
+        print(f"\n=== 3. ESCALA EM N (Vmax=10, tau_a=1.0) - o teste do 'aberta por minutos' ===")
         rows += _table(sub, "t_close_125", "t_close 1.25", "N", sorted(sub.N.unique()))
         rows += _table(sub, "t_close_110", "t_close 1.10", "N", sorted(sub.N.unique()))
         rows += _table(sub, "breach_area_125", "area da brecha", "N", sorted(sub.N.unique()))
 
+        print("\n  Expoente p em t_close ~ N^p (a alegacao sob teste e' p ~ 2):")
+        Ns = sorted(sub.N.unique())
+        for metric in ("t_close_125", "t_close_110"):
+            for meth in ("baseline", "B2"):
+                med = [sub[(sub.method == meth) & (sub.N == n)][metric].median() for n in Ns]
+                p = loglog_slope(Ns, med)
+                at100 = med[-1] * (100.0 / Ns[-1]) ** p if np.isfinite(p) else float("nan")
+                print(f"    {metric:<13} {meth:<9} p={p:5.2f}   "
+                      f"medianas={[f'{v:.2f}' for v in med]}   "
+                      f"extrapolado p/ N=100: {at100:.1f}s")
+
     print(f"\n=== 4. AREA DA BRECHA (N=24) ===")
     rows += _table(main24, "breach_area_125", "area da brecha", "tau_xy",
                    sorted(main24.tau_xy.unique()))
+
+    print("\n=== 5. A1: 'o tempo de reconfiguracao E' quanto tempo o vao fica aberto' ===")
+    a1 = a1_reconfiguration_vs_breach()
+    if a1.empty:
+        print("  (diretorios breach_runs_* ausentes -- so roda na maquina do sweep)")
+    else:
+        a1["ratio"] = a1["t_settle_egap"] / a1["t_close_125"]
+        for meth in ("baseline", "B2"):
+            s = a1[a1.method == meth]
+            r = s["ratio"].replace([np.inf, -np.inf], np.nan).dropna()
+            print(f"  {meth:<9} n={len(s):3d}  t_close={s.t_close_125.median():6.2f}s   "
+                  f"t_settle(E_gap)={s.t_settle_egap.median():7.2f}s   "
+                  f"tau_fit={s.tau_fit_egap.median():6.2f}s   "
+                  f"razao={r.median():6.2f}x  [{r.min():.1f}, {r.max():.1f}]")
+        a1_path = os.path.join(EXP_DIR, "breach_a1_reconfig_vs_breach.csv")
+        a1.to_csv(a1_path, index=False)
+        print(f"  Escrito: {os.path.basename(a1_path)}")
+        print("  razao >> 1 => as duas grandezas NAO sao a mesma; a brecha fecha muito")
+        print("  antes de o anel terminar de redistribuir.")
 
     out = pd.DataFrame([r for r in rows if r])
     out.to_csv(OUT_CSV, index=False)

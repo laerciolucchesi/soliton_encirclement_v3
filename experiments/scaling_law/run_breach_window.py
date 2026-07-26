@@ -67,6 +67,24 @@ THR_PRIMARY = 1.25
 THR_STRICT = 1.10
 
 
+def campaign_git():
+    """Git state of the CAMPAIGN, captured before the sweep writes anything.
+
+    Must be read at import/startup: once the runner writes its results CSV (an
+    untracked file), the tree is dirty and every later capture would say so --
+    which says nothing about the code that produced the run.
+    """
+    try:
+        sys.path.insert(0, REPO_ROOT)
+        import provenance
+        return provenance.git_provenance()
+    except Exception:
+        return "unknown", True
+
+
+CAMPAIGN_GIT = campaign_git()
+
+
 def victim_node_id(n, seed=0):
     """Agents occupy ids 2..N+1; vary the victim with the seed (symmetry check)."""
     return 2 + ((n // 2 + seed) % n)
@@ -206,9 +224,16 @@ def run_cell(method, vmax, tau, seed):
         return None
     m.update({"method": tag, "N": N, "vmax": vmax, "tau_xy": tau, "seed": seed,
               "dt": DT, "budget": BUDGET, "victim": victim})
-    # Campaign rule 5: every result row carries seed + git state + pinned params,
-    # read from the CHILD's run_manifest.json (never from this parent process).
+    # Campaign rule 5: every result row carries seed + git state + pinned params.
+    # The PINNED PARAMETERS come from the CHILD's run_manifest.json (never from
+    # this parent process, whose config_param holds the parent's defaults).
     m.update(run_provenance(run_dir))
+    # The GIT STATE, however, is a property of the CAMPAIGN, not of the cell: it is
+    # captured once before the sweep writes anything. Per-cell capture is
+    # self-referential -- the sweep's own untracked results CSV dirties the tree, so
+    # cell 1 records dirty=False and cells 2..n record dirty=True for no reason
+    # related to the code. Override with the campaign-level capture.
+    m["git_commit"], m["git_dirty"] = CAMPAIGN_GIT
     # Footprint: only target_telemetry/events are needed downstream.
     for fn in os.listdir(run_dir):
         if fn == "agent_telemetry.csv" or fn.endswith(".png"):

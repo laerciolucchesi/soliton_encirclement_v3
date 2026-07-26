@@ -660,3 +660,92 @@ which the data does not support; §9.2 C5 should say the map covers mean spacing
 error, not worst-case gap; §9.3 gains one honest limitation. Draft v1
 (`5-preliminary-results.tex`, `6-conclusion.tex`) could NOT be located — there is
 no `.tex` anywhere in this repo or the sibling projects.
+
+## 2026-07-26 — E4 deciding experiment: the breach window is actuation-limited
+Follows the 2026-07-26 churn re-analysis, which found the campaign had never
+measured the mission-critical quantity (the maximum angular gap) and proposed a
+pre-registered decision rule (CHURN_PAIRED.md §5.3). Full report:
+[BREACH_WINDOW.md](BREACH_WINDOW.md).
+
+Instrumentation first (`e062eed`): `target_telemetry.csv` gains `alive_count` and
+`gap_max_rad`. Without the alive count, `G_max` and `E_gap` — both normalised by
+2*pi/M — cannot be converted back to physical angles, so the absolute breach was
+unrecoverable even in principle, including from the 765 rows already collected.
+Schema now has a single definition (`protocol_target.TARGET_TELEMETRY_COLUMNS`).
+15 tests added (suite 205 -> 220) locking the geometry.
+
+Commands (git `93915a5`, clean tree; 140 runs, ZERO failures):
+```powershell
+# 6 parallel sweeps: 4 by Vmax (30 runs each) + 2 on the N axis (10 each)
+python experiments/scaling_law/run_breach_window.py     # BREACH_VMAX/_TAUS/_N/_SEEDS/_BUDGET
+python experiments/scaling_law/analyze_breach_window.py
+```
+Single deterministic PERMANENT failure (not churn: concurrent deaths contaminate
+the peak, 2.11 -> 3.49 from rate 6 to 48). N=24 baseline, Vmax {2.5,5,10,20} x
+tau_a {0.5,1,2} x 5 seeds, plus N {12,24,48} at Vmax=10/tau_a=1.
+
+**1. The peak is a geometric floor, exactly.** Predicted 2(N-1)/N = 1.9167;
+measured 1.9174 for BOTH methods, identical at every Vmax and tau_a, 0/60 losing
+pairs. It happens at the instant of the failure, before any protocol can act —
+state it as a bound, do not optimise it.
+
+**2. The duration is actuation-limited, and the overlay buys 1.1-1.5x.**
+t_close(1.25) baseline/B2 = 2.30/1.80, 3.15/2.35, 4.75/3.35 s at tau_a =
+0.5/1/2 — scales with tau_a. Across Vmax 2.5 -> 20 (8x) the medians are
+IDENTICAL to three digits (3.15 / 2.35). So: first-order actuation lag sets it,
+top speed does not, coordination buys 1.28-1.42x (60/60 pairs, p = 1e-4). At the
+stricter 1.10 threshold the overlay's edge is 2.0-3.1x.
+
+**3. REFUTED — "the reconfiguration time is exactly how long that gap stays
+open"** (draft v1 `1-introduction.tex:26`). Both quantities come from the same
+telemetry: baseline t_close = 3.15 s vs t_settle(E_gap) = 35.15 s, a factor
+**11.2x** [5.3, 17.4]; B2 2.35 vs 6.95 s, 3.0x. Consequence: the overlay's
+advantage on RECONFIGURATION TIME is ~5x here (9-149x in the large-N campaign),
+but on the BREACH WINDOW it is **1.34x**. Different results about different
+quantities, and only the second is about the thing the introduction calls
+mission-critical.
+
+**4. REFUTED — "the breach window grows with the square of the swarm size, at
+N=100 it stretches to minutes"** (v1 `1-introduction.tex:36-37`,
+`6-conclusion.tex:65-68`). Fitted exponent p in t_close ~ N^p: **0.31** (thr 1.25)
+and **0.64** (thr 1.10) for the baseline; 0.12 / 0.40 for B2. Extrapolated to
+N=100: 4.7 s and 18.2 s. Not N^2, not minutes. Worse for the motivation: the
+breach WIDTH shrinks with N — peak gap 60.1 deg / 30.0 deg / 15.1 deg at
+N = 12/24/48 — so single-failure risk decreases with swarm size on BOTH axes,
+the opposite of "this is also why scale matters".
+
+**What survives.** The Theta(N^2) relaxation and the flat-in-N reconfiguration
+are reproduced here (baseline tau_fit 20.29 s vs B2 2.14 s at N=24). What breaks
+is the motivational bridge from those results to mission relevance, which ran
+through a single-failure breach window that is short, weakly N-dependent and
+narrowing with N.
+
+**Reframing the data DOES support** (BREACH_WINDOW.md §5): slow reconfiguration
+matters because the ring is not ready for the NEXT event. At N=100 the baseline
+relaxation is 0.033*N^2 ~ 330 s, so any realistic failure rate finds the ring
+permanently non-uniform, and a failure landing on a non-uniform ring opens a
+worse gap — the churn data already shows the compounding (peak G_max 2.11 at
+6/min -> 3.49 at 48/min, vs the 1.92 single-failure floor). That argument is
+mission-relevant, N^2-driven and supported by data in hand; it is NOT yet the
+argument the thesis makes.
+
+**Next experiment, prediction pre-registered** (§6): re-run the churn sweep with
+the new telemetry and report breach metrics. Predicted: the overlay's advantage
+on peak G_max and time-above-threshold should be LARGER than the 1.34x measured
+for a single failure and should GROW with churn rate. If it stays ~1.3x and flat,
+the overlay does not buy breach safety at all and C5 must say so.
+
+**Thesis impact.** Draft v1 `1-introduction.tex` §Metrics does not list the
+maximum gap among its metrics although §Motivation calls it mission-critical —
+that omission is the structural origin of this whole finding. `:26` and `:36-37`
+must change (see above); `6-conclusion.tex:65-68` repeats them verbatim.
+Draft v2 does NOT carry the breach claim (checked): its edits are the
+metric-naming ones from the churn re-analysis (cap7 §7.2.7, cap9 §9.1/§9.2/§9.3).
+
+**Method note (a defect in P0's provenance, now fixed).** Per-cell git capture is
+self-referential: the sweep's own untracked results CSV dirties the tree, so cell
+1 records dirty=False and cells 2..n record dirty=True for reasons unrelated to
+the code (verified: `git status` during the sweep listed ONLY the output CSVs).
+`run_breach_window.py` now captures git state ONCE at startup, before writing
+anything — git state is a property of the CAMPAIGN, the pinned parameters are a
+property of the cell. Other runners adopting `run_provenance()` must do the same.

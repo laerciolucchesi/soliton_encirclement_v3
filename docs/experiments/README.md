@@ -50,10 +50,12 @@ Discarded-but-kept flags (all default off; see log entries): `DUAL_PULSE_GATE_*`
 | Delay | `run_comm_sweep.py` | `COMM_DELAY` (one value per invocation; use `COMM_TAG`) | overlay's open limit: breaks at 10·dt (dt=0.01) |
 | Moving target (constant / maneuver) × stresses | `run_trackC.py` | `TRACKC_SCENARIO` ∈ none, fail, loss, delay, churn_sparse, churn_dense, recover, stress; `TRACKC_MOTION` | `recover` = controlled ENTRADA; `stress` = churn+loss+delay |
 | Simultaneous multi-victim faults | `diag_churn.py` | `DETERMINISTIC_FAILURE_AGENT_ID` accepts a comma list | adj2/adj3 vs non2/non3 |
+| **Breach window** (max angular gap after a fault) | `run_breach_window.py` → `analyze_breach_window.py` | `BREACH_VMAX`, `BREACH_TAUS`, `BREACH_N`, `BREACH_SEEDS`, `BREACH_BUDGET` | needs `alive_count`/`gap_max_rad` (commit `e062eed`); see [BREACH_WINDOW.md](BREACH_WINDOW.md) |
 
 Gaps (no runner yet): stale-message injection per se; parametric target
 trajectories (circular / zigzag / step); churn at N ≠ 24; delay grid in one
-invocation.
+invocation; **churn reported on breach metrics** (`G_max` / `gap_max_rad`) rather
+than on `egap_avg` — the open question of [BREACH_WINDOW.md](BREACH_WINDOW.md) §6.
 
 ## 4. Metrics (`experiments/scaling_law/metrics_util.py`)
 
@@ -67,6 +69,7 @@ invocation.
 | `effort_mean_v2`, `sat_frac` | mean (v/Vmax)² and Pr(v ≥ Vmax) from agent telemetry (M5/M6 style) | control effort / saturation |
 | `fairness_p95` | P95 over nodes of per-node P95\|e_tau_real\| (M2 style) | fairness across agents |
 | `aggregate_seeds` | median + worst (max) + std across seeds | never report central tendency alone |
+| `run_provenance(run_dir)` | git + pinned params from the CHILD's `run_manifest.json` | campaign rule 5; see [PROVENANCE.md](PROVENANCE.md) |
 | `Er_avg`, `Evr_avg` | radial tracking error (target telemetry) | overlay must NEVER degrade these |
 | message counts | `dual_pulse_messages.csv` payload counts | O(N) total, O(1)/agent |
 
