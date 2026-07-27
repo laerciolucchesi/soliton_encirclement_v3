@@ -154,8 +154,13 @@ def settled_diagnostics(df):
             mark = " <== LIMIAR" if (e0 <= thr < e1) else ""
             bar = "#" * int(round(40 * c / max(counts.max(), 1)))
             print(f"    [{e0:11.3e}, {e1:11.3e}) {c:>4} {bar}{mark}")
-        # Fronteira: dentro de um fator 3 do limiar (nos dois lados).
-        near = df[(df[col] > thr / 3.0) & (df[col] < thr * 3.0)]
+        # Fronteira. Para grandezas positivas sem escala natural (egap_*), "perto"
+        # e' multiplicativo: um fator 3 dos dois lados. Para R2, que vive em [0,1],
+        # fator 3 abrangeria tudo -- ali a vizinhanca tem de ser ADITIVA.
+        if col == "tau_fit_r2":
+            near = df[(df[col] > thr - 0.10) & (df[col] < thr + 0.10)]
+        else:
+            near = df[(df[col] > thr / 3.0) & (df[col] < thr * 3.0)]
         if len(near):
             print(f"    FRONTEIRA (limiar/3 .. limiar*3): {len(near)} rodada(s)")
             for _, r in near.sort_values(col).iterrows():
@@ -172,7 +177,8 @@ def settled_diagnostics(df):
         if not len(s):
             continue
         ns = s[~s.settled.astype(bool)]
-        where = ", ".join(sorted({f"N{int(r.N)}/dt{r.dt:g}" for _, r in ns.iterrows()}))
+        # r["dt"] e nao r.dt: em pandas, .dt e' o acessor datetime, nao a coluna.
+        where = ", ".join(sorted({f"N{int(r['N'])}/dt{r['dt']:g}" for _, r in ns.iterrows()}))
         print(f"{LABEL[variant]:<32}{int(s.settled.sum()):>10}{len(s):>7}   {where}")
 
 
