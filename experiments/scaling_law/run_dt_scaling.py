@@ -288,11 +288,18 @@ def cells():
             for s in (0, 1, 2):
                 out.append(("C", "B2", 50, dt, s, 0.25))
     if "B" in GRIDS:
-        for dt in (0.01, 0.05):
-            for s in (0, 1):
-                out.append(("B", "baseline", 50, dt, s, None))
-        for dt in (0.01, 0.05):
-            out.append(("B", "baseline", 100, dt, 0, None))
+        # N=50 only by default. The N=100 baseline cell is DELIBERATELY out of scope:
+        # cost is dominated by (duration/dt)*N and the baseline budget at N=100 is
+        # 3.5*0.0417*100^1.94 ~ 1087 s of simulated time, i.e. hours per run -- while
+        # buying confirmation of an exponent that is not in dispute (baseline_long_results.csv
+        # already fixes 1.94, and largeN_results.csv already gives tau_base(100)=311 s).
+        # Set DTS_B_NS="50,100" to run it anyway.
+        b_ns = [int(x) for x in os.environ.get("DTS_B_NS", "50").split(",") if x.strip()]
+        for n in b_ns:
+            seeds = (0, 1) if n <= 50 else (0,)
+            for dt in (0.01, 0.05):
+                for s in seeds:
+                    out.append(("B", "baseline", n, dt, s, None))
     return out
 
 
