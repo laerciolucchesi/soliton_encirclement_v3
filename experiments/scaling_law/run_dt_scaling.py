@@ -175,7 +175,16 @@ def run_cell(grid, method, n, dt, seed, timeout_override=None):
         "COMMUNICATION_TRANSMISSION_RANGE": "200",
         "COMMUNICATION_DELAY": "0.0",
         "COMMUNICATION_FAILURE_RATE": "0.0",
-        "FAILURE_ENABLE": "False",
+        # FAILURE_ENABLE must be TRUE even though we want exactly one deterministic
+        # fault. protocol_agent.py:266 only schedules the failure-check timer when
+        # FAILURE_ENABLE is set, and the deterministic-fault branch lives INSIDE that
+        # timer's handler (protocol_agent.py:866). Setting it False therefore
+        # suppresses the deterministic fault too, and the run completes silently with
+        # NO event at all -- measured: tau_fit = 22.93 at N=24/dt=0.01 (an exponential
+        # fitted to noise) with zero dual_pulse events. The Poisson stream is bypassed
+        # for every agent whenever DETERMINISTIC_FAILURE_ENABLE is True
+        # (config_param.py section 5b), so True here is both necessary and safe.
+        "FAILURE_ENABLE": "True",
         "DETERMINISTIC_FAILURE_ENABLE": "True",
         "DETERMINISTIC_FAILURE_AGENT_ID": str(victim),
         "DETERMINISTIC_FAILURE_TIME_T0": f"{T0:g}",
