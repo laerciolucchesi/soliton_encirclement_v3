@@ -749,3 +749,95 @@ the code (verified: `git status` during the sweep listed ONLY the output CSVs).
 `run_breach_window.py` now captures git state ONCE at startup, before writing
 anything — git state is a property of the CAMPAIGN, the pinned parameters are a
 property of the cell. Other runners adopting `run_provenance()` must do the same.
+
+## 2026-07-27 — E3': the integration ladder regenerated on committed code
+The ladder (baseline -> A -> B -> B2) is the thesis's central table and its
+published numbers come from `optionB_results.csv` / `gain_results.csv`, produced
+2026-05-30 in an UNCOMMITTED tree. `git log -S` confirms `DUAL_PULSE_DELTA_SCALE`
+and `DUAL_PULSE_INTEGRATION` entered the versioned config in **ff54ade
+(2026-06-07)** -- the same commit that first committed those CSVs. No versioned
+config state corresponds to the runs that produced them. Full report:
+[LADDER.md](LADDER.md).
+
+Commands (git `f71600a` + `5701c18`, clean tree; 108 runs, ZERO failures, every
+row dirty=False):
+```powershell
+python experiments/scaling_law/run_ladder.py       # 6 variants x N{24,40,50} x 3 seeds, per dt
+python experiments/scaling_law/analyze_ladder.py
+```
+
+**Attribution first: the historical table was run at dt=0.01.** Neither old
+runner pins CONTROL_PERIOD; both inherited the default, which was 0.01 until
+Ciclo 1 (`figure_data.csv` confirms, dt_telem ~ 0.01). So the dt=0.01 grid is the
+REPRODUCTION test and dt=0.05 is the dt-invariance test -- not the reverse.
+Also: METRICS_T0 never touched any tau. It feeds exactly one place
+(`plot_telemetry.py:802` -> M1..M7 in runs_summary.csv), which the ladder never
+used; every campaign tau comes from event_metrics(df, T0) with T0=5.0 explicit.
+
+**Where parameters were knowable, reproduction is EXACT.** At dt=0.01 both
+baselines and Option A land within 0.4% of the published values at ALL three N
+(nine cells, three digits). That validates the runner, the metric path and the dt
+attribution at once.
+
+**Where they were unknowable, nothing reproduces.** The two failing rows are
+exactly the two Option-B rows, whose DELTA_SCALE was unrecoverable -- and picking
+the other scale does not fix it: published 3.27/7.78/12.20 vs measured
+@0.5 2.30/2.62/2.75 and @1.0 20.04/53.71/81.57. The published row sits between
+them at N=24 and outside both by N=50, and its SHAPE matches neither (it grows
+3.7x from N=24 to 50; @0.5 grows 1.20x, @1.0 grows 4.07x).
+
+**(i)** Which scale does "Option B" use: unknowable, and not recoverable by trying
+both. `run_optionB_test.py` never sets it; under today's config that same script
+would produce scale 1.0 (`_DPS_DEFAULT=1.0` for B/B2), so script and published
+label now disagree. Note the published table
+(`5-preliminary-results.tex:23-33`) has FIVE rows: it omits B-min@1.0, precisely
+the row that makes the double-drive narrative falsifiable.
+
+**(ii)** The double-drive MECHANISM is confirmed and strengthened -- raising the
+scale under the minimal bias costs 8.7x / 20.5x / 29.7x at N=24/40/50 (published:
+5.0x). But its CONCLUSION fails: B-min@0.5 is both flatter and faster than B2 at
+N>=40 (growth 1.20x vs 1.83x; tau at N=50 2.75 vs 4.06 s), same ordering at
+dt=0.05. "Only B2 is flat" does not hold on this grid, and B2 itself is NOT flat
+(2.22 -> 4.06).
+
+**(iii)** tau is dt-invariant in 16 of 18 cells (CV <= 7.3%). Two exceptions:
+- **The fixed-gain instability at N=50 is a dt=0.01 phenomenon.** At dt=0.01 the
+  fit diverges (201/1949/6862 over three seeds, R2~0, 0/3 settled) -- confirming
+  the qualitative claim while showing the published 140.1 is an artifact of
+  fitting one seed of a non-decaying signal. At dt=0.05 the SAME configuration is
+  stable: 17.19 s [17.1-17.4], 3/3 settled. The campaign moved the default to
+  dt=0.05 on the strength of dt-invariance; the Cap. 3 instability claim does not
+  survive that move.
+- B2 drifts with dt at large N (CV 6.8% at N=40, 11.9% at N=50) -- the only
+  variant whose dt-invariance degrades systematically.
+
+**The stability criterion does not separate cleanly** (applied unchanged, as
+specified; reported not acted on). Option A fails all 18 runs on tau_fit_r2
+(0.737-0.778) while its egap_late_std is 0.00065, BELOW threshold: it settles,
+it just does not decay exponentially, and R2 measures shape not stability. The
+N=24 failures of the slow variants are a budget artifact (run ends at 3.3 tau, so
+the last-20 s late_std still reflects ongoing decay). 9 runs sit within a factor
+3 of the egap_final threshold and 18 within a factor 3 of the late_std threshold.
+Recommendation (author's call): move R2 to a separate fit-quality column and
+define the late window relative to tau rather than a fixed 20 s.
+
+**The B2 discrepancy, bounded but not closed.** Regenerated B2 gives 4.06 s at
+N=50/dt=0.01; `largeN_results.csv`, itself committed and nominally the same
+configuration, reports 2.115 (and `figure_data.csv` agrees). At N=24 they agree
+(2.22 vs 2.17); the divergence grows with N. Ruled out by direct test: the fit
+window (tau identical for budgets 30-289 s), M8 (ablation: with M8 OFF tau=285.6,
+R2=0.14 -- M8 is ESSENTIAL to B2 at N=50, not the cause), M-mult (no effect),
+hop-alpha (no effect), ramp (no effect), and differing dual_pulse knobs
+(`run_largeN_confirm.py:105-111` sets the same four), and AGENT_STATE_TIMEOUT --
+the one knob this runner pins and the old one inherits (3.10 / 3.13 / 3.11 for
+5*dt / today's default / 0.2: no effect). Every testable parameter difference is
+eliminated; what is left is drift in the dual_pulse code itself since May 2026,
+which cannot be checked because that tree was never committed. The P2 premise
+demonstrating itself: unpinned numbers cannot be reproduced OR diagnosed.
+
+**Thesis impact.** Draft v1 `5-preliminary-results.tex` Table tab:scaling: four of
+five rows confirmed to three digits; the "Feedforward (B), scale 0,5" row is not
+reproducible; the missing sixth row should be restored. Its caption ("only B2 is
+flat") does not survive. `4-proposal.tex:189` keeps its mechanism and loses its
+exclusivity. The Cap. 3 instability claim needs a dt qualifier, or a re-check of
+whether the dt=0.05 default is safe in the fixed-gain regime.

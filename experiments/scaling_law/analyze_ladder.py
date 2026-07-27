@@ -293,6 +293,23 @@ def make_figure(df, out_path):
     ax.set_ylabel("desvio do historico [%]")
     ax.set_title("(b) Reproduz o historico?\ntracejado = +-10%", fontweight="bold")
     ax.grid(True, axis="y", alpha=0.3)
+    # O ganho fixo em N=50 desvia +1291% (o historico 140,1 vs o ajuste divergente
+    # medido): deixar o eixo livre esmagaria as outras 17 celulas contra o zero.
+    # Corta em +-120% e anota o que saiu fora.
+    ax.set_ylim(-120, 120)
+    for k, variant in enumerate(ORDER):
+        for i, n in enumerate(NS):
+            c = cell(df, variant, n, dt0)
+            if not c:
+                continue
+            dev = (c["median"] - HIST[variant][i]) / HIST[variant][i] * 100.0
+            if abs(dev) > 120:
+                ax.annotate(f"{dev:+.0f}%", (i + (k - 2.5) * width, 112),
+                            ha="center", va="top", fontsize=8.5, rotation=90,
+                            color="black", fontweight="bold",
+                            bbox=dict(boxstyle="round,pad=0.18", facecolor="white",
+                                      edgecolor=colors[variant], linewidth=1.2))
+    ax.legend(loc="lower left", fontsize=7, framealpha=0.92)
 
     # (c) dt-invariancia
     if len(dts) > 1:
