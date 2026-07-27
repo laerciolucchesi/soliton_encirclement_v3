@@ -841,3 +841,58 @@ reproducible; the missing sixth row should be restored. Its caption ("only B2 is
 flat") does not survive. `4-proposal.tex:189` keeps its mechanism and loses its
 exclusivity. The Cap. 3 instability claim needs a dt qualifier, or a re-check of
 whether the dt=0.05 default is safe in the fixed-gain regime.
+
+## 2026-07-27 — P3 PRE-REGISTRATION (written before the grid ran)
+Target: measure tau_B2 vs N and vs dt on current committed code; arbitrate the
+N=50/dt=0.01 cell; locate or rule out a dissemination-vs-actuation crossover.
+Report will be [DT_CROSSOVER.md](DT_CROSSOVER.md).
+
+**Disclosure of prior knowledge.** Two of the three predictions below are informed
+by data already in hand, and saying so is part of the pre-registration:
+- The P2 ladder already measured B2 at dt=0.01 for N=24/40/50 (3 seeds each):
+  2.22 / 3.07 / 4.06 s.
+- Before writing this, the (hop, t_apply) relation was characterised on P2's
+  SURVIVING telemetry, because `events.csv` already logs
+  `dual_pulse_event_completed_*` with `timestamp, node_id, h_CCW, h_CW, N_new`.
+  **No instrumentation of dual_pulse_layer.py is needed** -- the prompt's
+  logging-only change and its before/after tau check are therefore vacuous: there
+  is no code change, so tau cannot move. This is recorded as a divergence (P3.7).
+
+**P3.0 — the N=50/dt=0.01 arbitration.** Prediction: the grid reproduces the
+LADDER value, ~4.0-4.1 s, not largeN's 2.115. Basis: the ladder cell is 3 seeds
+with spread [4.0, 4.1] on committed, tested code with every parameter pinned;
+largeN is 2 seeds on a May tree that was never committed and whose runner
+inherits four defaults that have since moved. Falsifier: if the new grid lands
+near 2.115, the ladder runner has a defect and P2's conclusions need revisiting.
+Implication: at 4.06 the Lei 1 exponent is ~1.94-0.8 = ~1.1 and the N=100
+advantage is ~43x; at 2.115 it is ~1.9 and ~148x.
+
+**P3.1 — exponent of tau_B2 vs N.** Prediction: p ~ 0.8 at dt=0.01 over N=24..50
+(that is what the ladder's three points already give: log(4.06/2.22)/log(50/24) =
+0.82), and NOT flat. Over the extended range to N=100/150/200 I predict p stays
+in [0.6, 1.0] rather than flattening. Falsifier: p < 0.2 with R2 > 0.9 would mean
+tau IS flat and the ladder's three points were a small-N artefact.
+
+**P3.2 — c, ticks per hop.** Prediction: c ~ 0.5, NOT >= 1. Measured on P2
+telemetry at N=50: 5.19 ms/hop at dt=0.01 (c=0.52) and 29.0 ms/hop at dt=0.05
+(c=0.58), R2 0.95 / 0.90. Mechanism: within one tick the agents fire in some
+order, so a pulse whose receiver fires after its sender advances a hop in the
+SAME tick; averaged over the ring that is ~half the hops. Prediction for the
+grid: c stays in [0.45, 0.65] and is N-independent. Falsifier: c ~ 1 or c growing
+with N.
+Note the controlling variable is **max(h_CCW, h_CW)**, not h_CCW: a node applies
+its shift only when BOTH counter-propagating pulses have arrived. Regressing on
+h_CCW alone gives R2 = 0.03.
+
+**P3.3 — the crossover.** Prediction: dissemination is NOT what makes tau_B2 grow
+at dt=0.01. Basis: t_dissem at N=50 is 0.34 s against tau = 4.06 s (8%) at
+dt=0.01, but 1.85 s against tau = 3.20 s (58%) at dt=0.05 -- yet tau is LARGER at
+the dt where dissemination is CHEAPER. If dissemination drove the growth the
+ordering would be reversed. So I predict the crossover is absent in the dt=0.01
+arm within N<=100, and that whatever makes tau grow is not the hop transport.
+Falsifier: t_dissem ~ tau at the N where the dt=0.01 curve bends.
+
+**Adversary knob.** The prompt asks to pin ADVERSARY_ROAM_SPEED_XY=0.0. It is a
+plain literal at `config_param.py:157`, NOT env-overridable, so it cannot be
+pinned -- it is already 0.0 and is recorded as observed, not fixed. Same for
+TARGET_SWARM_SPIN_ENABLE (`:746`).
