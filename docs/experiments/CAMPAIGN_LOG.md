@@ -896,3 +896,84 @@ Falsifier: t_dissem ~ tau at the N where the dt=0.01 curve bends.
 plain literal at `config_param.py:157`, NOT env-overridable, so it cannot be
 pinned -- it is already 0.0 and is recorded as observed, not fixed. Same for
 TARGET_SWARM_SPIN_ENABLE (`:746`).
+
+## 2026-07-28 — P3 RESULT: the flat-tau claim survives, but only on the robust metric
+Pre-registration above (2026-07-27, `83a53ca`). Full report:
+[DT_CROSSOVER.md](DT_CROSSOVER.md). 46 runs, zero failures, every row dirty=False,
+git `5646696` (one cell at `c714f24`).
+
+**0. Arbitration.** B2 at N=50/dt=0.01 measures **4.060 s** [4.049, 4.069], three
+seeds -- reproducing the P2 ladder to three decimals (-0.0%) and diverging +92%
+from `largeN_results.csv`'s 2.115. Two independently written runners agree.
+DECISION: the ladder/P3 value is the record; largeN's B2 rows are SUPERSEDED (not
+deleted, rule 2 -- this entry is the note). P2 5 had already eliminated every
+testable cause; what remains is drift in a tree never committed.
+
+**1. The exponent, and the metric trap.** On `tau_fit` -- what the thesis
+publishes -- tau grows as N^1.246 (dt=0.01, R2=0.958) and N^1.019 (dt=0.05),
+from 2.2 s at N=24 to 12.9 s at N=100. Taken at face value that refutes flatness
+and turns Lei 1 into A ~ N^0.69, A(100) ~ 29x instead of 148x.
+**But the growth is a fit artefact.** As N rises the E_gap PEAK falls (an RMS over
+more nodes: 0.196 -> 0.099) while the residual floor RISES (0.00019 -> 0.00281),
+so the residual climbs to 57% of the fit's 5%-of-peak window and the exponential
+is fitted to a plateau. R2 collapses in lockstep: 0.969 -> 0.631. The campaign's
+own rule (README.md:63) is to trust tau_fit only at R2 >= 0.9, which N>=75 fails.
+On **`t_settle`**, the campaign's PRIMARY metric (enter-and-stay, shape-agnostic),
+tau_B2 is FLAT: 6.97 / 7.75 / 8.06 / 8.00 / 8.01 / 8.07 s at N=24..100, dt=0.01
+(exponent +0.079, R2=0.55 = no trend). At dt=0.05 it degrades mildly:
+7.30 -> 10.40 s (+42%, exponent +0.246).
+Grid B measured the baseline at N=50 in the SAME code: tau_fit 85.38 s
+(reproducing the historical 85.35 exactly), t_settle 128.06 s. Advantage at N=50:
+21.0x / 27.5x on tau_fit (dt 0.01/0.05) but 16.0x / 15.8x on t_settle -- the
+robust metric is also the dt-stable one.
+
+**2. dt-invariance and grid C.** tau_fit is invariant to N=40 (CV <= 6.8%) and not
+beyond (11.9 / 22.1 / 12.8% at N=50/75/100). GRID C settles what it is NOT:
+holding AGENT_STATE_TIMEOUT at 0.25 s instead of 5*dt -- a 5x change in detection
+latency -- moves tau by -0.044 s at dt=0.01 and +0.000 at dt=0.05. **tau_fit is
+immune to the failure detector's timeout in the clean regime** (a Cap. 7 sentence).
+
+**3. c = 0.581, range [0.477, 0.653], N-independent** -- pre-registration
+confirmed, and NOT the >= 1 the prompt assumed. Mechanism: within a tick the
+agents fire in some order, so ~half the hops advance in the same tick.
+Geometry correction: the reference line is c*(N-1)*dt, not c*(N/2)*dt -- each
+pulse travels ~N/2 but a node applies its shift only when BOTH arrive, so the
+controlling variable is max(h_CCW, h_CW) and the last node waits N-1 hops.
+Regressing on h_CCW alone gives R2 ~ 0.03; on the max, 0.56-0.98. Closure:
+t_dissem ~ t_detect + c*(N-1)*dt (N=100/dt=0.05: 3.22 predicted vs 3.25 measured).
+Coverage 1.000 in every cell with TTL=3N.
+
+**4. No crossover in range.** t_dissem/tau is 0.05-0.11 (dt=0.01) and 0.33-0.60
+(dt=0.05), and FALLS with N in both arms. Dissemination is not what limits B2 at
+N<=100. Pre-registration P3.3 confirmed. The prompt hoped the crossover would be
+the new positive result; it is not there. The new result is instead that the
+PUBLISHED METRIC stops measuring what it claims above N ~ 50.
+
+**Out of scope, by decision (2026-07-28).** Grid B at N=100: cut for cost with no
+scientific loss (budget alone ~1087 s simulated/run to confirm an exponent that
+baseline_long_results.csv already fixes at 1.94). Grid A2 (N=150, 200): cut for
+CONTAMINATION, not only cost -- HYSTERESIS_RAD is 0.05 rad absolute while the
+ideal gap at N=200 is 0.031 rad, so above **N ~ 126** the neighbour-switching
+hysteresis exceeds the ideal gap (config_param.py:263 documents the limit) and any
+"asymptote" measured there is the artefact. **That ceiling is an independent
+finding**: the current code has a structural N limit at ~126 that the campaign
+never measured, and any scaling claim beyond it is unsupported by construction.
+Reaching the true asymptote needs a separate grid with HYSTERESIS_FRAC set.
+
+**Divergences.** (a) No instrumentation was needed -- events.csv already carries
+(hop, t_apply) -- so the prompt's before/after tau check is vacuous and was not
+run. (b) The prompt's FAILURE_ENABLE=False is WRONG and silently destroys the
+experiment: protocol_agent.py:266 only schedules the failure-check timer when it
+is set, and the deterministic fault lives inside that handler (:866); measured
+tau_fit=22.93 at N=24/dt=0.01 with zero events. Caught after one cell, fixed to
+True, grid relaunched. (c) ADVERSARY_ROAM_SPEED_XY cannot be pinned (literal at
+:157, already 0.0). (d) P3.1 was directionally right (tau_fit does grow) and
+materially wrong (p=1.25, not 0.8) -- and was made on the wrong metric: it did not
+anticipate that tau_fit would stop being a time constant, which is the result.
+
+**Thesis impact.** 5-preliminary-results.tex: the "2.1 s flat to N=100" sentence
+rests on a superseded cell AND on a metric invalid above N~50. Two replacement
+sentences are drafted in DT_CROSSOVER.md 5 -- the t_settle one is defensible and
+costs the headline number (2.1 s -> ~8 s, 21x -> 16x at N=50). 2-related-work:177
+is STRENGTHENED: dissemination is measured, cheap (5-11% of tau) and fully covering.
+cap6: Lei 1 must name its metric. cap7: gains grid C and the N~126 ceiling.
