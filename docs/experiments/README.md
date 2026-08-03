@@ -87,6 +87,41 @@ Per-run M1..M7 (`plot_telemetry.py`) remain available in each run dir's
 6. `pytest` green + a unit test for the change itself.
 7. Result recorded in CAMPAIGN_LOG.md **even when rejected**.
 
+## 5b. Evidence standard — the two rules added 2026-08
+
+**Canonical text: `docs/thesis/draft/5-method.tex` §5.4.** Reproduced verbatim below because
+they were born in the thesis and had never been propagated to this operational record — a gap
+found while planning phase 8a (ii), when a runner needed to apply them and could not find them.
+
+**Cite these by NAME, not by number.** The thesis §5.4 list and this repository's campaign-rule
+numbering are independent registers with overlapping content, and they do not agree: in §5.4
+"Reproducibility" is a paragraph after the list rather than a numbered item, so the counts
+diverge. Numbers are local; names are stable.
+
+> **Count independent observations, not rows.** A factor swept in the campaign is not
+> necessarily a factor the measured quantity can depend on. The single-leave campaign records
+> 120 runs across four commanded speed limits and two methods, and we first reported the peak
+> over n=60 per arm; the recorded peaks collapse to 15 distinct values, because the peak occurs
+> before any response and is therefore exactly invariant to both swept factors. The overstatement
+> was fourfold, and the correction is not merely bookkeeping: the invariance that destroys the
+> sample size is the same fact the measurement exists to establish.
+
+> **A whole-run mean measures the run's length.** Averages taken over entire runs compare only
+> when the runs last equally long. Salvaging the control-effort telemetry from the archived
+> campaigns produced an apparent 30× effort difference between methods that was entirely an
+> artifact of run budgets (95 s against 265 and 1200 s): the longer run's mean is diluted by its
+> long, quiet tail, so the comparison measures budget, not effort. The fix is institutional
+> rather than prosaic: every aggregate row carries its denominator (the run duration), and the
+> scope is written into the column name itself (`_whole_run`) — the caveat lives where an analyst
+> cannot fail to see it, not in a paragraph nobody rereads.
+
+The name-carries-the-definition clause is the repair half of *A whole-run mean measures the
+run's length*, not a separate rule. `analysis_churn/EGAP_HOMONIMO.md` documents a second
+instance of the same principle: `egap_avg` names two different windows in two different runners.
+Phase 8a (ii) applies it by naming its columns `egap_mean_steady20`,
+`frac_gmax_gt125_steady20` — window and threshold in the name — and by carrying
+`n_samples_steady20` on every row.
+
 ## 6. Evidence index (which CSV answers which claim)
 
 Status: **canonical** = current best evidence; **diagnostic** = kept because it
