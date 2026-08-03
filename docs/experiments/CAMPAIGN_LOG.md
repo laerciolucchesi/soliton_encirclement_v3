@@ -977,3 +977,63 @@ sentences are drafted in DT_CROSSOVER.md 5 -- the t_settle one is defensible and
 costs the headline number (2.1 s -> ~8 s, 21x -> 16x at N=50). 2-related-work:177
 is STRENGTHENED: dissemination is measured, cheap (5-11% of tau) and fully covering.
 cap6: Lei 1 must name its metric. cap7: gains grid C and the N~126 ceiling.
+
+---
+
+## 2026-08-03 — Phase 8a (i): finite ring range. Two thresholds, and the overlay is worse than nothing below one of them
+
+**Hypothesis.** `dual_pulse` is a neighbour-only protocol, so it should keep working when the
+radio can only reach its neighbours. Every prior result used a single 200 m range — larger than
+the swarm diameter — so the ring's "neighbour" relation was logical, never physical, and the
+claim had never been tested.
+
+**Blocker removed first.** The claim was untestable with one global range, and not by accident:
+the agent's `AgentState` is ONE broadcast serving the ring AND the target, and the target must
+hear every agent or `_prune_expired_states` declares live drones dead, corrupting `alive_count`,
+`alive_lambdas` and every M1–M7 metric — silently, since `G_max`/`E_gap` normalise by the agents
+HEARD. Below R = 20 m the instrument dies with the phenomenon. GrADyS evaluates range at the
+SENDER only, so this cannot be fixed with a per-sender radio; `RoleAwareCommunicationHandler`
+supplies a range per `(sender_role, receiver_role)` pair instead (commit `3de1f99`).
+
+**Experiment.** N=24, R=20, `range_aa` ∈ {6.3, 8.4, 10.4, 15.7, 26.1} m with the uplink pinned at
+200 m, one deterministic permanent death, 8 paired seeds, baseline and B2. 80 cells, all
+`dirty=False`. `comm_range_results.csv`, full write-up in [COMM_RANGE.md](COMM_RANGE.md).
+
+**Verdict — TWO thresholds, for two different quantities.**
+- *Closing at all* needs ~1 hop: cliff at c ∈ (1.21, 1.61], **identical for both methods**, so it
+  belongs to the ring and the controller, not the overlay.
+- *The overlay's advantage* needs the **2-hop chord**, `2·R·sin(2π/N)` = 10.353 m here. At 8.4 m
+  B2 takes 6.45 s against the baseline's 3.27 s — a **2× penalty**, worse than running no overlay.
+  At 10.4 m it wins 2.30 vs 3.20 s (1.39×; 2.23× on the strict 1.10 threshold). Then it
+  **saturates**: 2.30–2.32 s from c = 2 to c = 5.
+
+**Knowledge produced — why, mechanically.** Coverage at 8.4 m is 22/23 with `hop_sum = 23`, so
+the pulses DO circle the ring; it is not truncation. The missing node is the victim's SUCCESSOR,
+in every seed. The originator is the victim's PREDECESSOR and one of its two counter-propagating
+pulses dies on the corpse, so the successor can only see that direction directly from the
+originator — across exactly the 2-hop chord — and a receiver needs BOTH directions to apply its
+shift. The successor is also the node flanking the LARGEST gap: it stays put while the other 21
+move. **Partial redistribution is worse than none.** This is a structural property of the
+single-originator coordination (v1), not a tuning issue.
+
+**Design rule produced.** Size the ring radio at `2·R·sin(2π/N)` and stop — half the uplink range
+at N=24, and more transmit power buys nothing.
+
+**Pre-registration held.** Prediction written before the grid ran: `gmax_peak` flat in range,
+because the peak precedes any protocol (`E[peak] = 2(M−1)/M` = 1.9167). Measured 1.914–1.917 for
+c ≥ 1.61, identical between methods. It moves at c = 1.21, and the `egap_pre` sentinel — added
+for exactly this — rules out the pre-event explanation (0.0037 everywhere, zero-width IQR), so
+the inflated peak there is post-event.
+
+**Negative result about our own notes.** `config_param.py`'s sizing note was wrong twice in
+opposite directions: first "2-hop chord governs closing" (refuted at N=10), then the correction
+"1-hop chord governs everything" (also wrong). Both rules exist, for different quantities. The
+N=10 sweep could not see it because it read `t_close` alone — the coverage column added for this
+phase is what separated them.
+
+**Caveat, and phase (i-b).** `AGENT_STATE_TIMEOUT` was pinned at 5·dt, and to a failure detector
+an out-of-range neighbour is indistinguishable from a dead one. At c = 1.21 the links flap, each
+flap injects a fresh SAIDA/ENTRADA, coverage returns ABOVE 1.0 and peaks reach 8.2 — the same
+false-storm pathology already documented under packet loss. That row is contaminated by the
+detector and must not be read as mechanism failure. Phase (i-b): re-run 6.3 and 8.4 m at 20·dt
+(32 cells, ~28 min) to separate detector from range. NOT YET RUN.

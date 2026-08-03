@@ -109,6 +109,7 @@ documents a diagnosis (superseded as a result); **archived** = local archive
 | Churn pre-trigger-fix (adv 0.48 disaster at 12/min) — the refuted result | archived `churn_sweep_results_pre_trigger_fix.csv` | diagnostic |
 | Loss ≤ 0.4 settles with FD timeout 0.2 s (graceful fallback; speedup shrinks 0.1–0.2, inert at 0.4) | `comm_results_fix.csv`, `comm_results_loss_clean.csv` | canonical |
 | Loss vulnerability WITHOUT FD fix (B2 breaks at 0.1) — diagnosis artifact | `comm_results.csv` | diagnostic (pre-fix; do not cite as current behavior) |
+| Finite ring range (N=24, R=20, uplink 200 m, 8 paired seeds): closing needs ~1 hop (cliff c ∈ (1.21, 1.61], SAME for both methods); the overlay's ADVANTAGE needs the 2-hop chord `2R·sin(2π/N)` — 2× penalty below it (6.45 vs 3.27 s), 1.39× gain above (2.30 vs 3.20 s), then saturates | `comm_range_results.csv` (→ [COMM_RANGE.md](COMM_RANGE.md)) | canonical |
 | repeats ≥ 2 amplifies FD false positives under loss | `comm_results_repeats.csv` | diagnostic |
 | Delay (M8 OFF, historical): degrades at 5·dt, breaks at 10·dt (egap 0.109); mechanism = stale state, not FD timeout | `comm_results_delay*.csv`, `comm_results_delaytmo.csv` | **superseded** — the break was an M8-OFF artifact; see the M8-fixes-delay row above |
 | Moving target: M8 fixes maneuver (0.0485 ≤ baseline 0.0499); benefit preserved under constant motion | `trackC_results_m8clean.csv` | canonical |
