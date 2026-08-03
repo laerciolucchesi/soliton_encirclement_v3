@@ -55,6 +55,27 @@ TARGET_TELEMETRY_COLUMNS = (
 )
 
 
+def skip_telemetry_plots() -> bool:
+    """Whether PNG rendering should be skipped this run.
+
+    Same switch, same spelling and same accepted values as ``plot_telemetry``.
+    The two are separate PNG producers: ``plot_telemetry`` draws the per-node
+    figures, ``TargetProtocol.finish()`` draws the five ``metric_*.png``. Only
+    the first honoured the flag, so every campaign cell of every sweep rendered
+    five matplotlib figures that nothing consumed -- the runners have been
+    setting SKIP_TELEMETRY_PLOTS=True since the first sweep and getting them
+    anyway.
+
+    Read at call time rather than import time so tests and runners that set the
+    variable after import still see it. CSV output is never affected by this
+    flag; it gates rendering only.
+    """
+    return (
+        os.environ.get("SKIP_TELEMETRY_PLOTS", "False").strip().lower()
+        in ("true", "1", "yes", "y")
+    )
+
+
 class TargetProtocol(IProtocol):
     """Implementation of target protocol."""
 
@@ -735,8 +756,10 @@ class TargetProtocol(IProtocol):
             file_exists = os.path.exists(self._csv_path)
             df.to_csv(self._csv_path, mode="a", header=not file_exists, index=False)
 
-            # Also write a PNG plot next to the CSV.
-            if plt is not None:
+            # Also write a PNG plot next to the CSV -- unless the run asked for
+            # no plots (batch sweeps). The CSV above is already written either
+            # way; this gate only skips rendering.
+            if plt is not None and not skip_telemetry_plots():
                 plot_df = df.copy()
                 plot_df["timestamp"] = pd.to_numeric(plot_df["timestamp"], errors="coerce")
                 plot_df["E_r"] = pd.to_numeric(plot_df["E_r"], errors="coerce")

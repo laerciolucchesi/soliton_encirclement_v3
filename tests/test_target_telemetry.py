@@ -21,7 +21,7 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, REPO_ROOT)
 
 from protocol_messages import AgentState  # noqa: E402
-from protocol_target import TARGET_TELEMETRY_COLUMNS, TargetProtocol  # noqa: E402
+from protocol_target import TARGET_TELEMETRY_COLUMNS, TargetProtocol, skip_telemetry_plots  # noqa: E402
 
 
 class _Provider:
@@ -177,3 +177,39 @@ def test_empty_ring_does_not_crash():
     assert row["alive_count"] == 0
     assert row["G_max"] == 0.0
     assert row["gap_max_rad"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# SKIP_TELEMETRY_PLOTS gate
+# ---------------------------------------------------------------------------
+# TargetProtocol.finish() is the SECOND PNG producer in this repo (the five
+# metric_*.png); plot_telemetry is the first. Only plot_telemetry honoured the
+# flag, so every sweep cell rendered five figures nobody consumed. These lock
+# the gate to the same spelling and the same accepted values as plot_telemetry,
+# since the two are coupled only by convention.
+
+@pytest.mark.parametrize("value", ["True", "true", "1", "yes", "y", "  TRUE  "])
+def test_skip_plots_accepts_the_same_truthy_values_as_plot_telemetry(monkeypatch, value):
+    monkeypatch.setenv("SKIP_TELEMETRY_PLOTS", value)
+    assert skip_telemetry_plots() is True
+
+
+@pytest.mark.parametrize("value", ["False", "false", "0", "no", "", "off"])
+def test_skip_plots_defaults_to_rendering(monkeypatch, value):
+    monkeypatch.setenv("SKIP_TELEMETRY_PLOTS", value)
+    assert skip_telemetry_plots() is False
+
+
+def test_skip_plots_absent_env_renders(monkeypatch):
+    monkeypatch.delenv("SKIP_TELEMETRY_PLOTS", raising=False)
+    assert skip_telemetry_plots() is False
+
+
+def test_flag_is_read_at_call_time_not_import_time(monkeypatch):
+    # Runners set the env for the CHILD process, and main.py imports this module
+    # before anything reads the flag; caching it at import would silently ignore
+    # the setting for exactly the runs that need it.
+    monkeypatch.setenv("SKIP_TELEMETRY_PLOTS", "True")
+    assert skip_telemetry_plots() is True
+    monkeypatch.setenv("SKIP_TELEMETRY_PLOTS", "False")
+    assert skip_telemetry_plots() is False
