@@ -257,6 +257,32 @@ timeout (median `topo_injections` 572 → 665). What drops is how many dual_puls
 (max landed ENTRADA 66 → 14, `seq_max` 42 → 25). So the long timeout suppresses the *consequences*
 of the flapping, not the flapping itself.
 
+### "Never closes" is an active state, not a stall
+
+Control effort and fairness, extracted from the per-agent telemetry of the 32 (i-b) cells
+(`comm_range_effort_ib.csv`, medians, t ≥ 5 s):
+
+| range | method | `effort_mean_v2` (M5) | `sat_frac` (M6) | `fairness_p95` (M2) |
+|---:|---|---:|---:|---:|
+| 6.3 m | B2 | 0.0105 | 0.0 | 0.950 |
+| 6.3 m | baseline | 0.0099 | 0.0 | 0.949 |
+| 8.4 m | B2 | 0.0001 | 0.0 | 0.046 |
+| 8.4 m | baseline | 0.0001 | 0.0 | 0.052 |
+
+Two orders of magnitude more control effort at 6.3 m, and a spacing error twenty times less
+evenly shared — with **zero saturation**, so the swarm is not fighting a velocity limit. This is
+independent evidence for the same finding, from a different instrument than `t_close`: the
+`inf` at c = 1.21 is not a formation sitting still because it cannot act, it is a formation
+**acting continuously without converging**. Nodes chase neighbours that keep entering and
+leaving radio range, and the effort is spent on a target that keeps moving.
+
+It also puts a floor under the practical reading of the closing cliff. Below it the cost is not
+just "the gap stays open": the swarm burns actuation — battery, in a real deployment — at a
+hundred times the settled rate, indefinitely, for a formation it never reaches.
+
+Note that both methods pay it almost equally (0.0105 vs 0.0099). Like the closing cliff itself,
+this is a property of the ring and the controller, not of the overlay.
+
 ## 5. Caveats
 
 **The shortest point is partly a detector artefact — resolved, see §4b.** At c = 1.21 the links
