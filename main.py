@@ -31,11 +31,15 @@ from protocol_target import TARGET_TELEMETRY_COLUMNS, TargetProtocol  # noqa: E4
 from protocol_agent import AgentProtocol  # noqa: E402
 from protocol_adversary import AdversaryProtocol  # noqa: E402
 import provenance  # noqa: E402
+from comm_role_aware import RoleAwareCommunicationHandler, agent_target_range_matrix  # noqa: E402
 from velocity_mobility import VelocityMobilityHandler, VelocityMobilityConfiguration  # noqa: E402
 from config_param import (  # noqa: E402
     COMMUNICATION_DELAY,
     COMMUNICATION_FAILURE_RATE,
     COMMUNICATION_TRANSMISSION_RANGE,
+    COMM_RANGE_AGENT_AGENT,
+    COMM_RANGE_AGENT_TARGET,
+    COMM_ROLE_AWARE_RANGES,
     ENCIRCLEMENT_RADIUS,
     INIT_ANGLES_EQUIDISTANT,
     INIT_RADIUS_RANGE,
@@ -226,7 +230,25 @@ def main():
         delay=delay,
         failure_rate=failure_rate,
     )
-    builder.add_handler(CommunicationHandler(medium))
+    if COMM_ROLE_AWARE_RANGES:
+        # Asymmetric ranges per (sender, receiver) role. See comm_role_aware for
+        # why this cannot be done with a sender-side radio.
+        builder.add_handler(
+            RoleAwareCommunicationHandler(
+                medium,
+                range_matrix=agent_target_range_matrix(
+                    agent_agent=COMM_RANGE_AGENT_AGENT,
+                    agent_target=COMM_RANGE_AGENT_TARGET,
+                ),
+            )
+        )
+        print(
+            f"[comm] role-aware ranges: agent<->agent={COMM_RANGE_AGENT_AGENT:g} m, "
+            f"agent<->target={COMM_RANGE_AGENT_TARGET:g} m, "
+            f"other links={transmission_range:g} m"
+        )
+    else:
+        builder.add_handler(CommunicationHandler(medium))
 
     builder.add_handler(TimerHandler())
 

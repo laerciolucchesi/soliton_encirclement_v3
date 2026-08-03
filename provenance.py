@@ -230,6 +230,12 @@ SUMMARY_FROM_CONFIG: Dict[str, str] = {
     "communication_delay": "COMMUNICATION_DELAY",
     "communication_failure_rate": "COMMUNICATION_FAILURE_RATE",
     "communication_range": "COMMUNICATION_TRANSMISSION_RANGE",
+    # Asymmetric ranges. communication_range alone cannot distinguish a run with
+    # a 30 m ring from a fully connected one, so the gate AND both ranges have
+    # to be on the row.
+    "comm_role_aware_ranges": "COMM_ROLE_AWARE_RANGES",
+    "comm_range_agent_agent": "COMM_RANGE_AGENT_AGENT",
+    "comm_range_agent_target": "COMM_RANGE_AGENT_TARGET",
     "agent_state_timeout": "AGENT_STATE_TIMEOUT",
     "broadcast_repeats": "DUAL_PULSE_BROADCAST_REPEATS",
     # Failure injection

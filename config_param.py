@@ -89,6 +89,65 @@ except ValueError:
 if not (0.0 <= COMMUNICATION_FAILURE_RATE <= 1.0):
     COMMUNICATION_FAILURE_RATE = 0.0
 
+# Role-aware (asymmetric) communication ranges -- OFF by default.
+#
+# COMMUNICATION_TRANSMISSION_RANGE above is a single range for every link. That
+# conflates two links with opposite requirements, because an agent's AgentState
+# is ONE broadcast serving two audiences: the ring neighbours (which we may want
+# short, for physical locality) and the target, which must hear every agent or
+# it prunes the silent ones as dead (protocol_target._prune_expired_states) and
+# drops them from alive_lambdas -- corrupting alive_count, the lambda map fed
+# back to the agents, and M1..M7, silently.
+#
+# When COMM_ROLE_AWARE_RANGES is False, main.py builds the stock
+# CommunicationHandler and nothing changes. When True it builds
+# comm_role_aware.RoleAwareCommunicationHandler, which picks the range per
+# (sender_role, receiver_role) pair:
+#   agent  <-> agent   : COMM_RANGE_AGENT_AGENT
+#   agent  <-> target  : COMM_RANGE_AGENT_TARGET   (both directions: the target
+#                        has the better radio -- stronger Tx AND better Rx)
+#   anything involving the adversary: COMMUNICATION_TRANSMISSION_RANGE.
+#
+# Sizing (R = ENCIRCLEMENT_RADIUS): the k-hop chord of the ring is
+# 2*R*sin(k*pi/N) -- 12.36 m at 1 hop and 23.51 m at 2 hops for N=10, R=20.
+#
+# The binding constraint is the 1-HOP chord, measured, not the 2-hop one. The
+# intuition that a ring range below the 2-hop chord breaks the redistribution
+# (right after a death the two survivors flanking the victim are 2 hops apart)
+# does NOT hold: they are only briefly out of range, the controller closes the
+# gap, and the pulses travel around the ring both ways without crossing it.
+# Measured at N=10, R=20, single deterministic death, dual_pulse/B2 -- full
+# recovery to G_max = 1.0000 at 20/22/25/30 m, collapse at 15 m (G_max 1.77)
+# and 13 m (1.99). So the cliff is between 1.1x and 1.6x the post-death 1-hop
+# chord (13.68 m at N=9), i.e. between 15 and 20 m for this configuration.
+# Re-measure before trusting these numbers at another N, R or churn density.
+#
+# Note that a FIXED metric range means the hop neighbourhood GROWS with N at
+# fixed R (30 m is 2 hops at N=10 but 13 hops at N=50 and 27 at N=100) -- that
+# is physical realism, not constant locality. To hold locality constant across
+# a scaling sweep, set the range per run as a multiple of 2*R*sin(pi/N).
+COMM_ROLE_AWARE_RANGES: bool = (
+    _os.environ.get("COMM_ROLE_AWARE_RANGES", "False").strip().lower()
+    in ("true", "1", "yes", "y")
+)
+
+
+def _comm_range_env(name: str) -> float:
+    """Read a role-aware range, falling back to the global range when unusable."""
+    try:
+        value = float(_os.environ.get(name, COMMUNICATION_TRANSMISSION_RANGE))
+    except ValueError:
+        return float(COMMUNICATION_TRANSMISSION_RANGE)
+    if not (value > 0.0) or value != value or value == float("inf"):
+        return float(COMMUNICATION_TRANSMISSION_RANGE)
+    return value
+
+
+# Ring link: agent <-> agent.
+COMM_RANGE_AGENT_AGENT: float = _comm_range_env("COMM_RANGE_AGENT_AGENT")
+# Uplink/downlink to the target, both directions.
+COMM_RANGE_AGENT_TARGET: float = _comm_range_env("COMM_RANGE_AGENT_TARGET")
+
 # Visualization defaults (used by main simulation entrypoints)
 # VIS_OPEN_BROWSER controls whether the GrADyS visualization auto-opens a
 # browser window. Disabling speeds up batch sweeps and avoids spawning
