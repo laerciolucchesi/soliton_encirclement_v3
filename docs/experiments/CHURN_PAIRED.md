@@ -402,11 +402,19 @@ limited by `Vmax` and `tau_a`, not by coordination, so there is a protocol-indep
 — must be split in two, because half of it is true by construction and half is the real
 question.
 
-* **The peak is trivially protocol-independent.** At the instant of the death the two
-  adjacent gaps merge before any protocol can act: `G_max` jumps to `2(N−1)/N = 1.92`
-  regardless of the algorithm. No coordination scheme can beat this; it is geometry, not
-  control. The probe (§3) measures 2.03–2.11 at sparse churn, within 10 % of it. **This part
-  of the conjecture needs no experiment — it needs to be stated as a bound in the thesis.**
+* **The peak's *expectation* is protocol-independent — the peak itself is not.**
+  *(Corrected 2026-08-02.)* At the instant of the death the two adjacent gaps merge before any
+  protocol can act. Summing `g_{i-1} + g_i` over all `M` agents counts every gap twice, so
+  `Σ = 4π` and, for a victim drawn uniformly among the alive, `E[merged gap] = 4π/M`, i.e.
+  **`E[G_max peak] = 2(M−1)/M` exactly, for any gap configuration** — see
+  [BREACH_WINDOW.md §1.1](BREACH_WINDOW.md). On a *uniform* ring the variance is zero and the
+  peak equals its mean, which is the 1.92 case. Under churn the ring is not uniform: measured
+  over 1 356 churn events at rates 6/12/24 (the identifiable per-event scope),
+  **29.6 % of peaks fall below `2(M−1)/M`**, 24.6 % sit at it and 45.8 % above; the split
+  shifts strongly with churn rate (48.2 % at the floor at 6/min vs 11.8 % at 48/min).
+  What no coordination scheme can move is the **expectation**; individual events move
+  in both directions. **This part of the conjecture needs no experiment — it needs to be
+  stated in the thesis as an exact expectation, explicitly NOT as a bound or a floor.**
 * **The *dwell* above threshold is the open question.** How long the breach stays open is a
   kinematic race, and that is where a protocol can win or lose.
 
@@ -461,7 +469,7 @@ absolute reading.
 
 | observation | conclusion |
 |---|---|
-| peak `G_max` ≈ 1.92 for both methods, flat in `Vmax` and `tau_a` | the peak floor is confirmed as geometric; report it as a bound, stop trying to improve it |
+| peak `G_max` ≈ 1.92 for both methods, flat in `Vmax` and `tau_a` | the peak's **expectation** is confirmed as geometric, `E[peak] = 2(M−1)/M` exactly for any configuration; report it as a **mean, not a bound** (30 % of churn events land below it), and stop trying to improve it |
 | `t_close` and breach area scale with `tau_a` and are ~equal for both methods | **conjecture confirmed**: the breach window is actuation-limited, coordination cannot shorten it |
 | `t_close` for B2 flat while the baseline's grows with `N` (add an N axis) | **conjecture refuted**: coordination does control the breach, and the campaign was measuring the wrong metric — `G_max` becomes the headline result |
 | B2's `t_close` *worse* than the baseline's | the feedforward overshoots the tail; a real defect, and the priority changes |

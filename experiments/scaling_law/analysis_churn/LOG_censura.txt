@@ -1,0 +1,65 @@
+==============================================================================
+A CENSURA COMO RESULTADO: ha tempo de ganhar entre eventos?
+==============================================================================
+Censura = a brecha NAO fechou antes do proximo evento. E' a medida direta de
+Pi_2 ('ha tempo de ganhar entre eventos?'), e e' medivel inclusive na taxa 48,
+onde o pico do evento NAO e' identificavel.
+
+ARMADILHA EVITADA: medir a censura dentro da janela COM TETO (1,5 s) daria ~100%
+em qualquer taxa por construcao -- estaria medindo 'fechou em 1,5 s', nao 'fechou
+antes do proximo evento'. As duas colunas abaixo mostram a diferenca.
+
+  taxa    Pi_2   pares  inter_med   cens>1.25    cens>1.5  [teto]>1.25   [teto]>1.5
+     6    0.80     108       3.50      0.4630      0.2037       1.0000       0.9815
+    12    1.60     193       1.80      0.6684      0.4611       0.9896       0.9326
+    24    3.20     350       1.20      0.8886      0.6714       1.0000       0.9486
+    48    6.40     604       0.70      0.9818      0.8642       0.9983       0.9669
+
+'cens' = janela ate o proximo evento (a medida certa de Pi_2).
+'[teto]' = janela cortada em 1,5 s (contraste; mede outra coisa).
+
+  taxa    Pi_2   base>1.25     B2>1.25    base>1.5      B2>1.5
+     6    0.80      0.4630      0.2778      0.2037      0.1667
+    12    1.60      0.6528      0.5337      0.4301      0.3938
+    24    3.20      0.8829      0.7514      0.6429      0.6057
+    48    6.40      0.9702      0.9255      0.8146      0.7765
+
+==============================================================================
+FRACAO DA JANELA EM BRECHA -- decomposicao de SINAL (sem media, sem modelo)
+==============================================================================
+
+-- limiar G_max > 1.25  (n=1255 pares) --
+   B2 sai da brecha e baseline NAO :  233  (18.57%)
+   EMPATE (nenhum dos dois sai)    :  999  (79.60%)
+   baseline sai e B2 NAO           :   23  (1.83%)
+   teste de SINAL sobre os 256 nao-empatados: 233/256 a favor de B2
+   proporcao 0.910, IC95 [0.868, 0.942], p=6.56e-45
+    taxa     n  B2 sai   empate  base sai   p sinal    prop
+       6   108      13       95         0  0.000244   1.000
+      12   193      37      152         4  1.03e-07   0.902
+      24   350      80      263         7  8.26e-17   0.920
+      48   604     103      489        12  3.35e-19   0.896
+
+   => CONCORDANTE: efeito na mesma direcao em TODAS as taxas. Resultado NAO
+      PARAMETRICO, imune a inflacao do pipeline: sem media, sem modelo, sem
+      necessidade de calibracao por nula sintetica.
+
+-- limiar G_max > 1.5  (n=1255 pares) --
+   B2 sai da brecha e baseline NAO :  221  (17.61%)
+   EMPATE (nenhum dos dois sai)    :  879  (70.04%)
+   baseline sai e B2 NAO           :  155  (12.35%)
+   teste de SINAL sobre os 376 nao-empatados: 221/376 a favor de B2
+   proporcao 0.588, IC95 [0.536, 0.638], p=0.00078
+    taxa     n  B2 sai   empate  base sai   p sinal    prop
+       6   108       6       96         6         1   0.500
+      12   193      21      149        23      0.88   0.477
+      24   350      50      256        44     0.606   0.532
+      48   604     144      378        82  4.48e-05   0.637
+
+   => DISCORDANTE entre taxas: o efeito aparece so em ['48'] e some nas
+      demais. Pela regra fixada, a DISCORDANCIA e' o resultado -- o agregado
+      NAO e' interpretavel e nao deve ser citado sozinho.
+
+gravado: fig_censura_pi2.png
+
+gravado: fig_censura_pi2.pdf

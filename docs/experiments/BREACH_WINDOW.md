@@ -6,8 +6,9 @@ the campaign had **never measured the mission-critical quantity at all**: the ma
 gap. This experiment measures it directly and tests the conjecture that the breach window is
 limited by actuation (`Vmax`, `tau_a`), not by coordination.
 
-**Answer, in one line.** The peak is a hard geometric floor that no protocol can touch
-(confirmed to 4 decimals). The *duration* is actuation-limited — it scales with `tau_a`, is
+**Answer, in one line.** The peak is the exact **expected value** `2(M−1)/M` of a distribution
+no protocol can shift — not a floor (individual events land both below and above it; see §1).
+The *duration* is actuation-limited — it scales with `tau_a`, is
 completely flat in `Vmax` — and the overlay buys a real but modest **1.1–1.5×**. And the two
 claims the thesis's motivation rests on are **both refuted by the simulator's own data**: the
 reconfiguration time is *not* how long the gap stays open (it is 11× longer), and the breach
@@ -37,10 +38,45 @@ python experiments/scaling_law/analyze_breach_window.py   # tables + figure
 Outputs: `breach_window_results_*.csv`, `breach_window_summary.csv`,
 `breach_a1_reconfig_vs_breach.csv`, `figures/fig_breach_window.png`.
 
-## 1. The peak is a geometric floor — exactly
+## 1. The peak is a geometric *expectation* — exactly
 
-Prediction: one death merges two gaps of 2π/N while the ideal becomes 2π/(N−1), so the
-instantaneous peak is `2(N−1)/N` = **1.9167** at N = 24.
+> **Corrected 2026-08-02 — it is a mean, not a bound.** The wording below used to say
+> "floor" / "no protocol can beat this". That is false: it is an **exact expectation**, and
+> under churn individual events fall **below** it about 30 % of the time. See §1.1.
+
+Prediction **on a uniform ring**: one death merges two gaps of 2π/N while the ideal becomes
+2π/(N−1), so the instantaneous peak is `2(N−1)/N` = **1.9167** at N = 24. The runs in this
+table start uniform by construction (`INIT_ANGLES_EQUIDISTANT=True`, single deterministic
+fault), so the uniform case is the one being measured here.
+
+### 1.1 The general statement — a theorem, with no hypothesis on the configuration
+
+Take a ring of `M` alive agents with gaps `g_1..g_M`, `Σ g_k = 2π`, **no assumption on how
+the gaps are distributed**. Agent `i` is flanked by `g_{i-1}` and `g_i`; when it dies those
+merge into `g_{i-1} + g_i`. Summing over every agent:
+
+```
+Σ_i (g_{i-1} + g_i) = 2 · Σ_k g_k = 4π        (each gap is counted twice)
+```
+
+So for a victim drawn uniformly at random among the alive — which is what the simulator does
+(`protocol_agent.py:918-920`, one independent draw per agent at the same rate):
+
+```
+E[merged gap] = 4π/M    and, normalised by the new ideal 2π/(M−1):
+E[peak G_max] = 2(M−1)/M      EXACTLY, FOR ANY CONFIGURATION
+```
+
+This is **not a bound**. It is a mean, and it is exact. The observed spread under churn —
+30 % of events below `2(M−1)/M`, 24 % at it, 46 % above — is the variance around an exact
+mean, not a violated floor. A uniform ring is simply the configuration with zero variance.
+
+Two consequences for how this must be written:
+* "no protocol can beat this" is **false** as stated. What no protocol can move is the
+  *expectation*; single events are movable in both directions, and are moved.
+* the churn peak climbing to 2.11 → 3.49 with rate (§ below) was already known to exceed
+  1.92; what was never considered is that it also falls **below**. Exceeded from above and
+  breached from below — it is a floor in neither direction.
 
 | method | median peak | [min, max] | n | ratio to prediction |
 |---|---:|---|---:|---:|
@@ -48,9 +84,11 @@ instantaneous peak is `2(N−1)/N` = **1.9167** at N = 24.
 | B2 | **1.9174** | [1.9167, 1.9246] | 60 | 1.0004 |
 
 Identical between methods at **every** `Vmax` (ratio 1.00, 0/60 losing pairs) and every
-`tau_a`. This half of the conjecture is confirmed — and it needed no experiment to be true: the
-peak happens at the instant of the failure, before any protocol can act. It should be stated in
-the thesis as a **bound**, not pursued as an optimisation target.
+`tau_a`. This half of the conjecture is confirmed **for the uniform ring these runs start
+from** — and there it needed no experiment: the peak happens at the instant of the failure,
+before any protocol can act. It should be stated in the thesis as an **exact expectation**
+(§1.1), not as a bound and not as an optimisation target. Stating it as a bound is wrong:
+under churn the ring is not uniform and ~30 % of events land below it.
 
 ## 2. The duration is actuation-limited, and the overlay buys 1.1–1.5×
 

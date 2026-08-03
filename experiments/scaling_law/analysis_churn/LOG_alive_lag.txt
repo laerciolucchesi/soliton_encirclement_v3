@@ -1,0 +1,57 @@
+==============================================================================
+ITEM 2 -- alive_count esta defasado? O teorema fecha com o M verdadeiro?
+==============================================================================
+
+  taxa  celulas  frac amostras diferentes   dif media  frac conta a MAIS  |dif| max
+     6       16                    0.0283      0.0201             0.0239          2
+    12       16                    0.0512      0.0358             0.0429          3
+    24       16                    0.0906      0.0615             0.0747          3
+    48       16                    0.1573      0.1114             0.1310          3
+
+dif = alive_count - verdadeiro. dif > 0 = o alvo ainda conta quem ja morreu.
+
+==============================================================================
+RECALCULO do teorema com o M VERDADEIRO
+==============================================================================
+defasagem na amostra PRE : media +0.0870, frac != 0 0.8379
+defasagem no instante PICO: media +0.3190, frac != 0 0.8502
+
+referencia usada                                media    se_cl   IC95 lo   IC95 hi      n
+M do alvo (alive_count no pico)  [atual]      1.06991  0.00882   1.05193   1.08789   2690  nao contem 1
+vao [rad] / (4pi/M_alvo)                      1.05418  0.00790   1.03807   1.07028   2690  nao contem 1
+vao [rad] / (4pi/M_VERDADEIRO)                1.06281  0.01745   1.02723   1.09839   2690  nao contem 1
+
+==============================================================================
+ITEM 3.1 -- onde estao as violacoes de S16?
+==============================================================================
+violacoes: 7 de 2690 (0.2602%)
+magnitude: mediana 0.620%, max 1.549%
+
+contingencia (contagem de violacoes / total do balde):
+  por rate_total:
+     6.0          0/226    (0.0000%)
+     12.0         0/404    (0.0000%)
+     24.0         0/726    (0.0000%)
+     48.0         7/1334   (0.5247%)
+  por method:
+     B2           2/1345   (0.1487%)
+     baseline     5/1345   (0.3717%)
+  por m_unstable:
+     False        6/1428   (0.4202%)
+     True         1/1262   (0.0792%)
+  por w_clip_floor:
+     False        4/1714   (0.2334%)
+     True         3/976    (0.3074%)
+  por peak_late:
+     False        7/2519   (0.2779%)
+     True         0/171    (0.0000%)
+
+  amostra das violacoes:
+  method  rate_total  seed  t_fail  gmax_pre  gmax_peak  alive_pre  w_e      mag
+baseline        48.0     0   128.8  1.772428   1.665767       19.0  0.6 0.007966
+baseline        48.0     2    75.2  2.138422   1.997504       16.0  0.6 0.003625
+baseline        48.0     3    98.0  2.178938   2.011106       16.0  1.0 0.015493
+baseline        48.0     3   142.5  2.025915   1.912688       20.0  0.9 0.006199
+baseline        48.0     4    94.0  2.262962   2.134588       19.0  0.6 0.004325
+      B2        48.0     3    98.0  2.114006   1.957346       16.0  1.0 0.012379
+      B2        48.0     7    28.9  1.835944   1.742753       20.0  0.8 0.000799

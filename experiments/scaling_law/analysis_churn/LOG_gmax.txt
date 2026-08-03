@@ -1,0 +1,312 @@
+==============================================================================
+G_max POR EVENTO -- efeitos fixos de evento, janela ADAPTATIVA
+==============================================================================
+GATE OK -- reprodutibilidade confirmada nas 64 celulas:
+==========================================================================
+SENTINELA DE REPRODUTIBILIDADE: PASSOU em 64 celula(s) x 3 metricas = 192 valores, rtol=1e-09
+==========================================================================
+Prova de reprodutibilidade: a campanha c3_churn8_dt05 e' bit-reprodutivel
+no commit atual. Nenhuma mudanca de codigo entre a campanha e hoje alterou
+egap_avg/p90/max.
+
+S11 OK  32 pares (taxa, semente) com fluxo de falhas IDENTICO
+
+-- S15: alive_count(t) e' identico entre os bracos? (item 3) --
+  taxa  celulas  frac_igual_min  frac_igual_med  amostras_dif
+     6        8        1.000000        1.000000             0
+    12        8        1.000000        1.000000             0
+    24        8        1.000000        1.000000             0
+    48        8        1.000000        1.000000             0
+
+   => 100% IDENTICO em todas as celulas. O padrao de ausencia e' o MESMO nos
+      dois bracos a cada instante, logo sai na diferenca pareada. A flag
+      m_unstable (D.2) e' DESCRITIVA, nao ameaca ao teste principal.
+
+==============================================================================
+D.1 -- por que janela fixa nao serve: truncamento vs CONTAMINACAO
+==============================================================================
+  W [s]   pares  tardio_todos  tardio_ISO  n_iso  lag_p99   p99/W
+    1.5    1343        0.0633      0.0000    251    1.500   1.000
+      3    1323        0.0884      0.0000    124    3.000   1.000
+      5    1298        0.1071      0.0000     51    4.950   0.990
+   Duas assinaturas, e as duas apontam CONTAMINACAO, nao truncamento:
+   (a) a fracao tardia entre TODOS NAO cai quando W cresce -- janela maior
+       engole mais eventos concorrentes e o maximo vira o pico de outro evento;
+   (b) o lag p99 ACOMPANHA W (razao p99/W ~ 0,97-0,99 nas tres janelas) em vez
+       de ESTACIONAR num valor fisico. Se fosse truncamento de um transiente
+       unico, p99 estabilizaria assim que W passasse a duracao do transiente.
+   Entre os ISOLADOS a fracao tardia e' ~0: a janela nunca foi curta.
+
+==============================================================================
+JANELA ADAPTATIVA  W_e = clip(t_prox_evento - t_f, 0.6, 1.5) s
+==============================================================================
+W_e e' identico nos dois bracos (o fluxo de eventos e' o mesmo, S11) -> exogeno.
+eventos por braco: 2690  |  pares: 1345
+
+  taxa   pares   W_e med   W_e p25   W_e p75  frac_piso  frac_cheia  identificavel?
+     6     113     1.500     1.500     1.500      0.106       0.761  sim
+    12     202     1.500     0.900     1.500      0.203       0.569  sim
+    24     363     1.100     0.600     1.500      0.311       0.377  sim
+    48     667     0.600     0.600     1.200      0.483       0.166  NAO IDENTIFICAVEL
+
+   SENTINELA: taxa(s) ['48'] com mediana de W_e no
+   piso (0.6 s) ou >=50% dos eventos truncados pelo piso. Nessas taxas o
+   pico do evento NAO e' separavel do proximo: DECLARADAS NAO IDENTIFICAVEIS
+   para o teste por evento, em vez de produzir um numero.
+
+==============================================================================
+TESTE PRINCIPAL -- alpha POR TAXA (agregado so depois, e so se concordarem)
+==============================================================================
+d_pico = gmax_peak(baseline) - gmax_peak(B2), mesmo evento nos dois bracos.
+Cluster = semente dentro de cada taxa; = (taxa, semente) no agregado.
+
+  taxa   pares   alpha_tot  alpha (DIRETO)    IC95 lo    IC95 hi         p        b1               IC95 b1
+     6     113     0.01524         0.00212   -0.02312    0.02737   0.84799   -0.4731  [ -0.9617,  0.0155]
+    12     202     0.01644         0.00226   -0.05411    0.05864   0.92699    0.0580  [ -0.7146,  0.8306]
+    24     363     0.03221         0.00266   -0.06153    0.06684   0.92477    0.4661  [  0.0616,  0.8705]
+
+   As taxas CONCORDAM (mesmo veredito de IC, mesmo sinal quando nao-nulo).
+   O agregado entre taxas e' legitimo e vem abaixo.
+
+-- AGREGADO TOTAL: d_pico ~ 1   n=678  clusters=24  R2=0.0000
+termo                            coef     se_cl       t    IC95 lo    IC95 hi         p
+alpha                         0.02469   0.01270    1.94   -0.00159    0.05096   0.06428
+
+-- AGREGADO DIRETO: d_pico ~ 1 + d_gmax_pre + d_egap_pre   n=678  clusters=24  R2=0.0623
+termo                            coef     se_cl       t    IC95 lo    IC95 hi         p
+alpha                        -0.00160   0.01614   -0.10   -0.03499    0.03179   0.92204
+b1                            0.32068   0.15480    2.07    0.00045    0.64091   0.04970
+b2                            0.21768   0.39323    0.55   -0.59577    1.03114   0.58521
+
+==============================================================================
+ITEM 2 -- b3 e' INTERACAO ou FORMA FUNCIONAL ERRADA?
+==============================================================================
+A relacao estrutural prevista e' MULTIPLICATIVA: pico ~ (g_pred+g_succ)/ideal.
+Ajustar um modelo ADITIVO a uma relacao multiplicativa produz residuo com forma
+de interacao, e b3 > 0 ('a inclinacao cresce com o nivel') e' a assinatura disso.
+Se b3 SUMIR em log, nao havia interacao -- havia forma funcional errada.
+
+-- ADITIVO  + interacao NAO centrada (b1 = inclinacao em pre_bar=0)   n=678  clusters=24  R2=0.1455
+termo                            coef     se_cl       t    IC95 lo    IC95 hi         p
+alpha                         0.02507   0.01948    1.29   -0.01523    0.06537   0.21089
+b1                           -1.65444   0.43500   -3.80   -2.55430   -0.75457   0.00092
+b2                            0.55651   0.38325    1.45   -0.23629    1.34932   0.15998
+b3                            1.11016   0.22533    4.93    0.64404    1.57629   0.00006
+
+-- ADITIVO  + interacao CENTRADA    (b1 = inclinacao na media)   n=678  clusters=24  R2=0.1455
+termo                            coef     se_cl       t    IC95 lo    IC95 hi         p
+alpha                         0.02507   0.01948    1.29   -0.01523    0.06537   0.21089
+b1                           -0.11919   0.15351   -0.78   -0.43674    0.19836   0.44539
+b2                            0.55651   0.38325    1.45   -0.23629    1.34932   0.15998
+b3                            1.11016   0.22533    4.93    0.64404    1.57629   0.00006
+
+-- EM LOG   + interacao NAO centrada   n=678  clusters=24  R2=0.1264
+termo                            coef     se_cl       t    IC95 lo    IC95 hi         p
+alpha                         0.01179   0.00897    1.31   -0.00677    0.03035   0.20179
+b1                           -0.54237   0.11565   -4.69   -0.78161   -0.30313   0.00010
+b2                            0.02081   0.00964    2.16    0.00087    0.04076   0.04157
+b3                            1.60965   0.19223    8.37    1.21199    2.00731   0.00000
+
+-- EM LOG   + interacao CENTRADA   n=678  clusters=24  R2=0.1264
+termo                            coef     se_cl       t    IC95 lo    IC95 hi         p
+alpha                         0.01179   0.00897    1.31   -0.00677    0.03035   0.20179
+b1                           -0.06170   0.07334   -0.84   -0.21343    0.09002   0.40883
+b2                            0.02081   0.00964    2.16    0.00087    0.04076   0.04157
+b3                            1.60965   0.19223    8.37    1.21199    2.00731   0.00000
+
+   ATENCAO: b1 muda de sinal entre a versao nao centrada e a centrada se o
+   moderador nunca chega perto de zero. A versao CENTRADA e' a interpretavel;
+   b3 e' identico nas duas (centrar nao altera a interacao).
+
+-- S16: gmax_peak >= gmax_pre*(M-1)/M (modelo MAX; testa a EXTRACAO) --
+   satisfazem: 2683/2690 (99.7398%)   violam: 7 (0.2602%)
+   => desigualdade satisfeita: a extracao esta correta (a janela nao perdeu o
+      pico e a amostra 'pre' esta bem cronometrada).
+   ramo ativo do max: vao PRE-existente em 0.37% dos eventos; FUSAO em 99.63%
+   => o max e' DEGENERADO na pratica: um unico ramo ativo em >95% dos casos.
+      Um max com o 2o ramo quase sempre inativo NAO gera b1<0 com b3>0, entao
+      ma-especificacao de max nao explica o padrao observado.
+
+-- TEOREMA: E[pico]/(2(M-1)/M) tem de valer 1,000 (media exata, nao cota) --
+   pico normalizado / 2(M-1)/M      media = 1.06991  se_cl = 0.00882  IC95 [1.05193, 1.08789]  n=2690
+                                    -> IC NAO contem 1,000
+   vao de fusao [rad] / (4*pi/M)    media = 1.05418  se_cl = 0.00790  IC95 [1.03807, 1.07028]  n=2690
+                                    -> IC NAO contem 1,000
+   1a amostra / 2(M-1)/M            media = 1.02982  se_cl = 0.00571  IC95 [1.01817, 1.04146]  n=2498
+                                    -> IC NAO contem 1,000
+   1a amostra [rad] / (4pi/M)       media = 1.02844  se_cl = 0.00576  IC95 [1.01670, 1.04019]  n=2498
+                                    -> IC NAO contem 1,000
+   Se der sistematicamente != 1: ou as falhas nao sao uniformes entre os vivos, ou
+   a extracao tem vies. Qualquer das duas e' achado.
+   Tres causas BENIGNAS de desvio POSITIVO, todas de sinal conhecido:
+     (i)   o pico e' o MAXIMO sobre a janela = estatistica de valor extremo sobre
+           ~12-30 amostras; enviesa para cima mesmo com ruido puro;
+     (ii)  o pico e' o max sobre TODOS os vaos, >= o vao de fusao;
+     (iii) e' medido ~0,30 s apos a falha, ja com movimento.
+   A linha '1a amostra' remove (i). Se a razao cair para ~1,000 la, o desvio do
+   pico era valor extremo. Desvio NEGATIVO contradiria o teorema; positivo nao.
+
+-- RETIRADO: a evidencia de 'censura pelo piso' era artefato --
+   distribuicao vs 2(M-1)/M: abaixo 28.3% | no piso 18.2% | acima 53.5%
+   A versao anterior comparava corr(gmax_pre, gmax_peak) DENTRO de faixas estreitas
+   de gmax_peak -- isto e', condicionando na VARIAVEL DEPENDENTE. Selecionar uma
+   faixa de y remove quase toda a variancia de y e atenua ou INVERTE a correlacao
+   com qualquer preditor, HAJA CENSURA OU NAO. As duas correlacoes condicionais
+   foram RETIRADAS do argumento; so a incondicional e' interpretavel.
+   corr(gmax_pre, gmax_peak) incondicional, n=2690: +0.437
+   Alem disso o modelo 'pico ~ max(piso, f(pre))' e' internamente incoerente com o
+   proprio dado: se fosse um max com esse piso, NADA estaria abaixo dele -- e
+   28.3% esta. O piso nao e' um ramo do max.
+
+   ACHADO SEPARADO (nao e' sobre b3): 2(M-1)/M e' violado por baixo em 28.3%
+   dos eventos de churn. Como COTA INFERIOR por evento, nao vale sob churn; e' o
+   valor do caso UNIFORME. Ver a lista de formulacoes em docs/experiments/.
+
+-- EM LOG, so NAO-CENSURADOS (pico > piso nos 2 bracos)   n=209  clusters=20  R2=0.1496
+termo                            coef     se_cl       t    IC95 lo    IC95 hi         p
+alpha                         0.02722   0.01374    1.98   -0.00154    0.05597   0.06226
+b1                           -0.24106   0.21832   -1.10   -0.69800    0.21588   0.28331
+b2                            0.06915   0.01958    3.53    0.02818    0.11012   0.00223
+b3                            0.92858   0.40913    2.27    0.07226    1.78491   0.03506
+
+-- DESFECHO NORMALIZADO log(pico/piso) + interacao   n=678  clusters=24  R2=0.1245
+termo                            coef     se_cl       t    IC95 lo    IC95 hi         p
+alpha                         0.01190   0.00901    1.32   -0.00674    0.03053   0.19961
+b1                           -0.54077   0.11608   -4.66   -0.78090   -0.30064   0.00011
+b2                            0.02072   0.00966    2.15    0.00074    0.04071   0.04269
+b3                            1.60223   0.19305    8.30    1.20288    2.00157   0.00000
+
+  b3 ADITIVO                  = +1.11016 [+0.64404, +1.57629] p=0.00006 -> IC NAO contem zero
+  b3 EM LOG                   = +1.60965 [+1.21199, +2.00731] p=0.00000 -> IC NAO contem zero
+  b3 EM LOG, nao-censurados   = +0.92858 [+0.07226, +1.78491] p=0.03506 -> IC NAO contem zero
+  b3 log(pico/piso)           = +1.60223 [+1.20288, +2.00157] p=0.00000 -> IC NAO contem zero
+
+  => b3 sobrevive aos testes de ESCALA. Isso NAO o promove a achado:
+     todos os quatro modelos assumem forma aditiva ou log-aditiva, e nenhum
+     acomoda um MAX. A explicacao concorrente nomeada e' ma-especificacao
+     de max -- que S16 mostrou ser a estrutura correta, ainda que degenerada
+     na amostra. b3 permanece DESCRITIVO ate o desfecho ser trocado pela
+     FUSAO no subconjunto identificado por variavel exogena (abaixo).
+
+==============================================================================
+QUINTA explicacao para b1 < 0: RESTRICAO COMPOSICIONAL (predicao de ponto)
+==============================================================================
+Os vaos somam 2*pi: um vao maior obriga os outros a serem menores, por aritmetica.
+Com o sitio da morte aleatorio entre os outros: pico ~ 2(1 - G/M) => d(pico)/dG = -2/M.
+
+M mediano (vivos)                          21.00
+PREVISTO pela composicao (-2/M)         -0.09524
+   -2/M em M= 18.0: -0.11111
+   -2/M em M= 21.0: -0.09524
+   -2/M em M= 23.0: -0.08696
+
+Tres estimativas de b1 em NIVEL, e elas NAO sao a mesma coisa:
+termo                                       coef    IC95 lo    IC95 hi  contem -2/M?
+(a) SEM interacao (inclinacao media)     0.32068    0.00045    0.64091  nao
+(b) COM interacao, CENTRADO na media    -0.11919   -0.43674    0.19836  SIM
+(c) COM interacao, NAO centrado (em 0)  -1.65444   -2.55430   -0.75457  nao
+
+   (c) e' a inclinacao onde pre_bar = 0 -- ponto que NUNCA ocorre (pre_bar >= 1).
+       E' extrapolacao fora do dado e NAO deve ser comparada com -2/M.
+   (b) e' a inclinacao no centro da amostra: e' a comparavel com a identidade.
+   => (b) CONTEM -2/M: b1 e' compativel com a identidade contabil. Nao ha
+      magnitude em excesso para explicar, e b3 nao pode estar morando nela.
+   AVISO: (a) e (b) tem SINAIS OPOSTOS. Com interacao presente, a inclinacao
+   media unica e a inclinacao no centro nao coincidem; reportar as duas e
+   nunca uma so.
+
+==============================================================================
+ITEM 4 -- gmax_peak e' o desfecho ERRADO para D21; usar a FUSAO
+==============================================================================
+gmax_peak so mede a fusao quando a fusao domina. No subconjunto onde o anel nao
+tem nenhum vao grande, gap_max_rad NO PICO = g_pred + g_succ exatamente, e D21 e'
+testavel SEM MODELO.
+
+Dois seletores, e a diferenca entre eles importa:
+  * gmax_pre baixo  -> identifica o subconjunto certo, mas e' POS-TRATAMENTO (e' o
+    estado que o metodo produziu). Serve para a checagem GEOMETRICA de D21, que e'
+    identidade e nao comparacao entre bracos. NAO serve para comparar bracos.
+  * gap_prev (tempo desde o evento anterior) -> EXOGENO: vem so do fluxo de falhas
+    e e' identico nos dois bracos (S11). E' o seletor usado para comparar bracos.
+   S17 OK  gap_prev identico nos dois bracos (seletor exogeno confirmado)
+
+-- 4a. checagem GEOMETRICA de D21 (descritiva; sem comparar bracos) --
+recorte por gmax_pre            n  gap_rad_pico   2*(2pi/M)    razao  gmax_peak   2(M-1)/M
+todos                        2690        0.6139      0.5984   1.0120     1.9562     1.9048
+<= P50                       1345        0.5702      0.5712   1.0071     1.9316     1.9091
+<= P25                        673        0.5486      0.5464   1.0047     1.9262     1.9130
+<= P10                        269        0.5288      0.5236   1.0009     1.9190     1.9167
+   razao -> 1 conforme o recorte aperta = D21 confirmada: o pico E' a soma dos dois
+   vaos que ladeiam quem sai, e 2(M-1)/M e' o caso particular uniforme.
+
+-- 4b. FUSAO comparada entre bracos, estratificada por gap_prev (EXOGENO) --
+   quartis de gap_prev: 0.60 / 1.50 / 3.20 s
+estrato gap_prev            n  d_fusao [rad]    IC95 lo    IC95 hi         p
+<= 0.60s                  169        0.01748   -0.00570    0.04066   0.13140
+0.60-1.50s                168        0.00438   -0.00657    0.01533   0.41569
+1.50-3.20s                169        0.00790   -0.00207    0.01788   0.11486
+> 3.20s                   172        0.00592    0.00193    0.00991   0.00540
+
+-- FUSAO agregada: d_fusao ~ 1 [rad]   n=678  clusters=24  R2=0.0000
+termo                            coef     se_cl       t    IC95 lo    IC95 hi         p
+alpha                         0.00891   0.00411    2.17    0.00042    0.01741   0.04048
+   d_fusao > 0 = a fusao do baseline abre um vao MAIOR, em radianos, no mesmo
+   evento. E' a comparacao sem modelo e sem normalizacao por M.
+
+-- recortes (descritivos; com janela adaptativa o isolamento deixa de ser
+   condicao do teste e vira caso particular: w_full = sem evento ate W_MAX) --
+
+-- so eventos com janela CHEIA (w_full)   n=338  clusters=24  R2=0.2088
+termo                            coef     se_cl       t    IC95 lo    IC95 hi         p
+alpha                        -0.01738   0.01407   -1.24   -0.04648    0.01173   0.22928
+b1                            0.73040   0.20460    3.57    0.30714    1.15366   0.00163
+b2                           -0.00181   0.76105   -0.00   -1.57616    1.57254   0.99813
+
+-- so M ESTAVEL na janela (D.2)   n=427  clusters=24  R2=0.0344
+termo                            coef     se_cl       t    IC95 lo    IC95 hi         p
+alpha                        -0.01311   0.01290   -1.02   -0.03979    0.01357   0.31999
+b1                            0.33613   0.14000    2.40    0.04652    0.62573   0.02483
+b2                           -0.09473   0.45329   -0.21   -1.03244    0.84298   0.83631
+
+-- so M INSTAVEL (D.2)   n=251  clusters=22  R2=0.0813
+termo                            coef     se_cl       t    IC95 lo    IC95 hi         p
+alpha                         0.02341   0.02700    0.87   -0.03273    0.07956   0.39562
+b1                            0.27227   0.19941    1.37   -0.14243    0.68696   0.18658
+b2                            0.53313   0.58658    0.91   -0.68674    1.75299   0.37373
+
+
+-- vao ABSOLUTO: d_arco_m ~ 1  (R=20 m)   n=678  clusters=24  R2=-0.0000
+termo                            coef     se_cl       t    IC95 lo    IC95 hi         p
+alpha                         0.17828   0.08211    2.17    0.00842    0.34813   0.04048
+   arco mediano no pico: baseline 11.193 m, B2 11.299 m
+
+==============================================================================
+CONFERENCIA (secundaria): agregado por rodada -- probe_gmax_floor.py
+==============================================================================
+Mistura pico-do-evento com estado-pre-evento; NAO decide H1 vs H2.
+
+==============================================================================
+VEREDITO
+==============================================================================
+Taxas identificaveis: 6, 12, 24
+Taxas NAO identificaveis (declaradas, nao estimadas): 48
+
+  taxa  6: alpha = +0.00212 [-0.02312, +0.02737] p=0.84799 -> IC contem zero   (n=113)
+  taxa 12: alpha = +0.00226 [-0.05411, +0.05864] p=0.92699 -> IC contem zero   (n=202)
+  taxa 24: alpha = +0.00266 [-0.06153, +0.06684] p=0.92477 -> IC contem zero   (n=363)
+
+  AGREGADO TOTAL  = +0.02469 [-0.00159, +0.05096] p=0.06428
+  AGREGADO DIRETO = -0.00160 [-0.03499, +0.03179] p=0.92204
+  b1 (mediacao)   = +0.32068 [+0.00045, +0.64091]
+  MEDIADO = TOTAL - DIRETO = +0.02628
+
+=> PADRAO INTERMEDIARIO: reportar os tres coeficientes, sem forcar rotulo.
+
+Recortes (alpha):
+  janela cheia   alpha = -0.01738 [-0.04648, +0.01173] p=0.22928 -> IC contem zero
+  M estavel      alpha = -0.01311 [-0.03979, +0.01357] p=0.31999 -> IC contem zero
+  M instavel     alpha = +0.02341 [-0.03273, +0.07956] p=0.39562 -> IC contem zero
+  (D.2: S15 deu 100% -- m_unstable e' descritivo; estes dois recortes sao
+   verificacao redundante, nao ameaca.)
+
+Vao ABSOLUTO: d_arco = +0.17828 m [+0.00842, +0.34813] p=0.04048

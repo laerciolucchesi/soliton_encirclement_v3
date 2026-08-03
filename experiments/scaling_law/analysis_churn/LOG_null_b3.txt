@@ -1,0 +1,75 @@
+==============================================================================
+NULO SINTETICO para b3 -- mundo SEM efeito de metodo, por construcao
+==============================================================================
+Anel: M vaos ~ Dirichlet(alpha) somando 2*pi. baseline recebe anel MAIS
+disperso (alpha menor); B2, mais uniforme. A vitima e' a MESMA nos dois bracos.
+O pico e' funcao DETERMINISTICA do anel sorteado: nao ha efeito de metodo.
+REPS=200  runs/rep=24  eventos/run=56  seed=0
+alvo de calibracao (dado real): gmax_pre mediano baseline=1.5018 B2=1.4059
+calibracao sintetica: gmax_pre mediano baseline=1.5950 B2=1.4500 (alpha 12 vs 20)
+
+-- UMA replica, tabela completa (mesmo formato do dado real) --
+   ADITIVO nao centrado:
+      alpha     -0.00566  IC95 [-0.03091, +0.01959]  p=0.64723
+      b1        -1.12847  IC95 [-2.18839, -0.06854]  p=0.03793
+      b2         0.09373  IC95 [-0.35372, +0.54118]  p=0.66881
+      b3         0.81035  IC95 [+0.17508, +1.44561]  p=0.01468
+   ADITIVO centrado:
+      alpha     -0.00566  IC95 [-0.03091, +0.01959]  p=0.64723
+      b1         0.12498  IC95 [-0.05079, +0.30075]  p=0.15488
+      b2         0.09373  IC95 [-0.35372, +0.54118]  p=0.66881
+      b3         0.81035  IC95 [+0.17508, +1.44561]  p=0.01468
+   EM LOG nao centrado:
+      alpha     -0.00201  IC95 [-0.01510, +0.01108]  p=0.75336
+      b1        -0.46389  IC95 [-0.86144, -0.06634]  p=0.02415
+      b2        -0.03189  IC95 [-0.27223, +0.20845]  p=0.78617
+      b3         1.33556  IC95 [+0.57257, +2.09855]  p=0.00143
+
+-- 200 replicas: com que frequencia b3 sai 'significativo' no NULO? --
+modelo                  b3 mediano    b3 p05    b3 p95  frac IC exclui 0
+ADITIVO nao centr.         0.94986   0.49811   1.40835             0.835
+ADITIVO centrado           0.94986   0.49811   1.40835             0.835
+EM LOG                     1.46222   0.86752   2.07400             0.935
+
+-- comparacao com o dado REAL --
+modelo                   b3 REAL   percentil no NULO  veredito
+ADITIVO nao centr.        1.1102               0.690  b3 SAI NO NULO -> ARTEFATO DE ESPECIFICACAO
+ADITIVO centrado          1.1102               0.690  b3 SAI NO NULO -> ARTEFATO DE ESPECIFICACAO
+EM LOG                    1.6097               0.615  b3 SAI NO NULO -> ARTEFATO DE ESPECIFICACAO
+
+LEITURA: 'frac IC exclui 0' e' a taxa de falso positivo do proprio pipeline num
+mundo sem efeito. Se for muito acima de 0,05, a especificacao fabrica interacao
+sozinha e b3 nao pode ser reportado como achado em nenhuma direcao.
+
+==============================================================================
+RECALIBRACAO DOS OUTROS COEFICIENTES CONTRA A MESMA NULA
+==============================================================================
+Neste mundo nulo o metodo NAO afeta o pico dado o anel -- mas AFETA o anel
+(dispersao diferente entre bracos, calibrada no dado real). Entao a nula mede
+exatamente quanto de efeito TOTAL surge so da geometria, sem fisica adicional.
+O p honesto e' o PERCENTIL do valor real na distribuicao nula, nao o p nominal.
+
+coeficiente           REAL  p nominal  nula: mediana  nula: p05  nula: p95  frac rejeita  percentil real
+alpha_direto      -0.00160      0.922       -0.00611   -0.03508    0.02618         0.080           0.585
+alpha_total        0.02469      0.064        0.03422    0.01606    0.05453         0.790           0.205
+d_arco             0.17828      0.040        0.22019    0.09663    0.34735         0.795           0.300
+b3_add             1.11016      0.000        0.98391    0.55447    1.49038         0.900           0.720
+
+'percentil real' = fracao das replicas nulas com coeficiente MENOR que o real.
+Perto de 0,50 => o valor real e' tipico do mundo SEM efeito. Acima de 0,95 =>
+fora da nula, e ai sim ha efeito alem da geometria.
+
+  alpha DIRETO   percentil 0.585: DENTRO da nula -> nao distinguivel de um
+                 mundo em que o metodo nao afeta o pico dado o anel.
+  alpha TOTAL    pipeline rejeita em 79.0% das replicas NULAS -- p nominal inflado ~16x.
+  alpha TOTAL    percentil 0.205: DENTRO da nula -> nao distinguivel de um
+                 mundo em que o metodo nao afeta o pico dado o anel.
+  d_arco [m]     pipeline rejeita em 79.5% das replicas NULAS -- p nominal inflado ~16x.
+  d_arco [m]     percentil 0.300: DENTRO da nula -> nao distinguivel de um
+                 mundo em que o metodo nao afeta o pico dado o anel.
+  b3             pipeline rejeita em 90.0% das replicas NULAS -- p nominal inflado ~18x.
+  b3             percentil 0.720: DENTRO da nula -> nao distinguivel de um
+                 mundo em que o metodo nao afeta o pico dado o anel.
+
+NOTA sobre alpha_direto: um pipeline que rejeita DEMAIS e que, mesmo assim, NAO
+rejeitou (p=0,922) e' evidencia de nulo MAIS forte, nao menos.

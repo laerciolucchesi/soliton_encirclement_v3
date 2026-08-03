@@ -1,0 +1,127 @@
+==========================================================================
+FASE 1 -- CARGA E SENTINELAS
+==========================================================================
+fonte canonica : churn_sweep_results_c3_churn8_dt05.csv
+sha256[:16]    : c92a002cb14f319a
+nota           : churn_sweep_results.csv e' BYTE-IDENTICO a esta fonte (mesmo sha256). Nao e' campanha distinta e nao deve ser citado.
+S1 OK  linhas = 64
+S2 OK  metodos = ['B2', 'baseline']
+S8 OK  orientacao travada: numerador 'baseline', denominador 'B2'
+S6 OK  nenhuma celula (metodo, taxa, semente) duplicada
+S3 OK  toda celula (metodo, taxa) tem as sementes [0, 1, 2, 3, 4, 5, 6, 7]
+S4 OK  N=24 | tau_xy=1s | off(T_off)=8s constantes nas 64 linhas
+S5 OK  sem NaN em ['egap_avg', 'egap_p90', 'egap_max']
+S7 OK  metricas da figura todas > 0
+S9 OK  Pi_2' < N em todas as taxas (max=6.40 de N=24)
+S10 nota  'sat_frac': todas as diferencas sao exatamente zero (metrica diagnostica, fora da figura) -- DECLARACAO DE ESCOPO, nao falha
+S10 OK  nenhuma metrica da figura e degenerada
+
+-- 1.2 ESCOPO: o que varia e o que nao varia ---------------------------
+VARIA    method      = ['B2', 'baseline']
+VARIA    rate_total  = [6.0, 12.0, 24.0, 48.0] falhas/min TOTAIS do anel
+VARIA    seed        = [0, 1, 2, 3, 4, 5, 6, 7] (n=8 por celula, pareadas)
+CONST    N           = 24
+CONST    tau_xy      = 1 s
+CONST    off (T_off) = 8 s
+CONST    dt          = 0.05 s (run_churn_sweep.py:44; campanha '_dt05')
+CONST    canal       = loss=0, delay=0 (run_churn_sweep.py:72)
+CONST    alvo        = estacionario (run_churn_sweep.py:73)
+CONST    init        = equidistante, sem dispersao de raio (run_churn_sweep.py:73)
+CONST    ganho       = K_E_TAU = 250/N (run_churn_sweep.py:70)
+CONST    janela      = t >= 20 s ate 155 s (run_churn_sweep.py:41-42,51)
+
+-- 1.3 SATURACAO DO ATUADOR --------------------------------------------
+sat_frac: min=0 media=0 max=0
+=> sat_frac == 0 em 100% das 64 celulas: campanha inteiramente no regime
+   NAO SATURADO do atuador. Isto e' DECLARACAO DE ESCOPO, nao falha da
+   metrica nem do teste (vai tambem na legenda da figura).
+
+==========================================================================
+FASE 2 -- PAREADA POR SEMENTE (calculo reusado de analyze_churn_paired.py)
+==========================================================================
+-- 2.4 Pi_2', conta explicita para rate_total = 6 falhas/min ------
+   lambda_anel = 6/60          = 0.1 falhas/s
+   Pi_2'       = 0.1 * 8  = 0.8000 agentes ausentes
+   % do anel   = 3.33% de N=24
+   renovacao   = 0.8000/(1+0.8000/24) = 0.7742 ausentes (exato)
+
+-- egap_avg ----------------------------------------------------------
+ taxa    Pi2  renov  base_med   b2_med  raz_med     q25     q75  med_raz raz_med.s        p  n<1
+    6   0.80   0.77    0.0819   0.0626   1.3140  1.2556  1.3213   1.2946    1.2902 0.007812    0
+   12   1.60   1.50    0.1293   0.1024   1.2260  1.1856  1.2570   1.2239    1.2177 0.007812    0
+   24   3.20   2.82    0.1982   0.1719   1.1545  1.1512  1.1723   1.1609    1.1609 0.007812    0
+   48   6.40   5.05    0.2840   0.2449   1.1357  1.1283  1.1654   1.1432    1.1413 0.007812    0
+   media-das-razoes vs razao-das-medias: divergencia relativa maxima 0.51% (taxa 12) -> assimetria desprezivel
+
+-- egap_p90 ----------------------------------------------------------
+ taxa    Pi2  renov  base_med   b2_med  raz_med     q25     q75  med_raz raz_med.s        p  n<1
+    6   0.80   0.77    0.1811   0.1708   1.0449  1.0258  1.0552   1.0426    1.0426 0.015625    1
+   12   1.60   1.50    0.2294   0.2112   1.0527  1.0458  1.0705   1.0609    1.0609 0.007812    0
+   24   3.20   2.82    0.2956   0.2737   1.0886  1.0607  1.1001   1.0799    1.0787 0.007812    0
+   48   6.40   5.05    0.4179   0.3675   1.1288  1.1099  1.1443   1.1236    1.1227 0.007812    0
+   media-das-razoes vs razao-das-medias: divergencia relativa maxima 0.11% (taxa 24) -> assimetria desprezivel
+
+-- egap_max ----------------------------------------------------------
+ taxa    Pi2  renov  base_med   b2_med  raz_med     q25     q75  med_raz raz_med.s        p  n<1
+    6   0.80   0.77    0.2987   0.2878   0.9884  0.9560  1.0932   1.0266    1.0322 0.945312    5
+   12   1.60   1.50    0.3847   0.3270   1.0612  0.9886  1.3125   1.1250    1.1103 0.250000    3
+   24   3.20   2.82    0.4830   0.4067   1.1545  1.1057  1.1863   1.1530    1.1535 0.015625    1
+   48   6.40   5.05    0.6144   0.6296   0.9842  0.9641  1.1617   1.0810    1.0698 0.742188    5
+   media-das-razoes vs razao-das-medias: divergencia relativa maxima 1.32% (taxa 12) -> assimetria desprezivel
+
+==========================================================================
+FASE 2c -- FORMA DA DISTRIBUICAO (p90/avg e max/avg)
+==========================================================================
+ taxa    Pi2 metodo     p90/avg    [q25    q75]  (medianas)  max/avg    [q25    q75]  (medianas)
+    6   0.80 baseline     2.104   1.969   2.260       2.210    3.627   3.096   4.056       3.645
+    6   0.80 B2           2.677   2.446   2.761       2.727    4.341   4.059   5.472       4.597
+   12   1.60 baseline     1.770   1.728   1.813       1.774    2.978   2.655   3.432       2.975
+   12   1.60 B2           2.023   1.953   2.120       2.062    3.273   3.125   3.412       3.192
+   24   3.20 baseline     1.507   1.477   1.546       1.492    2.535   2.456   2.706       2.437
+   24   3.20 B2           1.631   1.605   1.642       1.592    2.547   2.456   2.616       2.367
+   48   6.40 baseline     1.436   1.429   1.470       1.471    2.156   2.056   2.334       2.164
+   48   6.40 B2           1.492   1.473   1.509       1.500    2.418   2.296   2.514       2.570
+
+   baseline  p90/avg: 2.10 -> 1.44 (por rodada) | 2.21 -> 1.47 (razao das medianas)
+   B2        p90/avg: 2.68 -> 1.49 (por rodada) | 2.73 -> 1.50 (razao das medianas)
+
+==========================================================================
+FASE 2b -- A VANTAGEM CAI COM O CHURN? (teste pareado por semente)
+==========================================================================
+
+-- egap_avg: razao(taxa=6) - razao(taxa=48), por semente
+   s0=+0.163  s1=+0.146  s2=+0.117  s3=+0.135  s4=+0.200  s5=+0.140  s6=+0.185  s7=+0.126
+   sementes com QUEDA da vantagem: 8/8  (com ALTA: 0/8)  -> CAI com o churn (unanime)
+   Wilcoxon pareado (1 amostra, exato, n=8): W=0.0, p=0.007812
+   Teste de sinal (binomial exato): p=0.007812
+   [contraste] Spearman razao~Pi_2' sobre 32 pares NAO independentes: rho=-0.8204, p=9.0572e-09
+
+-- egap_p90: razao(taxa=6) - razao(taxa=48), por semente
+   s0=-0.047  s1=-0.128  s2=-0.155  s3=-0.015  s4=-0.050  s5=-0.106  s6=-0.051  s7=-0.095
+   sementes com QUEDA da vantagem: 0/8  (com ALTA: 8/8)  -> SOBE com o churn (unanime)
+   Wilcoxon pareado (1 amostra, exato, n=8): W=0.0, p=0.007812
+   Teste de sinal (binomial exato): p=0.007812
+   [contraste] Spearman razao~Pi_2' sobre 32 pares NAO independentes: rho=0.6630, p=3.5537e-05
+
+-- egap_max: razao(taxa=6) - razao(taxa=48), por semente
+   s0=+0.230  s1=-0.066  s2=+0.104  s3=+0.014  s4=-0.086  s5=-0.542  s6=+0.077  s7=-0.165
+   sementes com QUEDA da vantagem: 4/8  (com ALTA: 4/8)  -> sem direcao (empate)
+   Wilcoxon pareado (1 amostra, exato, n=8): W=16.0, p=0.843750
+   Teste de sinal (binomial exato): p=1.000000
+   [contraste] Spearman razao~Pi_2' sobre 32 pares NAO independentes: rho=0.0848, p=0.644622
+
+   Qual confiar: o teste de 2b (n=8 independentes -- cada semente contribui UMA
+   diferenca). O Spearman de 32 pares reusa a mesma semente nas 4 taxas, logo seu
+   p e' otimista por construcao; fica so como contraste.
+   Piso de p com n=8: Wilcoxon bilateral exato = 0.007812; sinal = 0.007812.
+
+==========================================================================
+FASE 3 -- FIGURAS
+==========================================================================
+  gravado: fig_vantagem_vs_pi2linha.png
+  gravado: fig_vantagem_vs_pi2linha.pdf
+  gravado: fig_vantagem_vs_pi2linha_suplementar.png
+  gravado: fig_vantagem_vs_pi2linha_suplementar.pdf
+  gravado: RESULTADO_PI2.md  (o RESULTADO.md consolidado e' curado a mao)
+
+OK -- 10 sentinelas passaram.

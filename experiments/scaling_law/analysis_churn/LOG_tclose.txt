@@ -1,0 +1,59 @@
+==============================================================================
+AREA DE BRECHA e t_close SOB CHURN -- a segunda metade da decomposicao
+==============================================================================
+pico            -> NULO (duas analises independentes) = nao compra o piso
+t_close / area  -> 1,28-1,42x na falha unica          = compra a inclinacao
+Aqui: a segunda metade SOB CHURN, mesmo desenho pareado por evento.
+GATE OK -- 64/64 celulas bit-reprodutiveis.
+
+pares (taxas ['6', '12', '24']): 678
+
+==============================================================================
+t_close E' IDENTIFICAVEL SOB CHURN?
+==============================================================================
+  limiar   pares  censurados     frac  veredito
+    1.25     678         676    0.997  NAO IDENTIFICAVEL (censura alta)
+     1.5     678         645    0.951  NAO IDENTIFICAVEL (censura alta)
+
+Censura = a brecha NAO fechou dentro da janela adaptativa. Sob churn o intervalo
+entre eventos e' MENOR que o tempo de fechar, entao t_close completo nao cabe na
+janela -- isso e' propriedade do REGIME, nao defeito da medida. A campanha de
+falha unica mede t_close porque la ha um evento so.
+A AREA dentro da janela nao tem esse problema: e' comparavel entre bracos porque
+W_e e' identico nos dois (S11), e nao exige que a brecha feche.
+
+==============================================================================
+AREA DE BRECHA na janela -- pareada por evento
+==============================================================================
+As quatro estatisticas juntas, sempre (regra fixada apos o episodio dos 18 cm):
+media, mediana, fracao de sinal e media-sem-decil-superior.
+
+-- limiar G_max > 1.25 --------------------------------------------------
+  area   [adim*s]  media +0.03520 IC95 [+0.01727, +0.05313] p=0.0005
+                   mediana +0.00952  frac>0 0.544  media s/ decil sup -0.01040
+                   medianas: base 0.62353 vs B2 0.61018  -> razao 1.022
+  arcom  [   m*s]  media +0.22273 IC95 [+0.11292, +0.33254] p=0.0003
+                   mediana +0.05239  frac>0 0.544  media s/ decil sup -0.06241
+                   medianas: base 3.63200 vs B2 3.63007  -> razao 1.001
+  frac   [  adim]  media +0.04399 IC95 [+0.03460, +0.05338] p=0.0000
+                   mediana +0.00000  frac>0 0.205  media s/ decil sup +0.00906
+                   medianas: base 1.00000 vs B2 0.86667  -> razao 1.154
+  por taxa (area):
+       6/min  n=113   media +0.02300 IC95 [-0.00009, +0.04609] p=0.0507  mediana +0.00607  frac>0 0.566
+      12/min  n=202   media +0.02424 IC95 [+0.00862, +0.03986] p=0.0080  mediana +0.00713  frac>0 0.520
+      24/min  n=363   media +0.04510 IC95 [+0.00885, +0.08135] p=0.0217  mediana +0.01382  frac>0 0.551
+
+-- limiar G_max > 1.5 --------------------------------------------------
+  area   [adim*s]  media +0.03090 IC95 [+0.01342, +0.04839] p=0.0013
+                   mediana +0.00674  frac>0 0.529  media s/ decil sup -0.01402
+                   medianas: base 0.32394 vs B2 0.32907  -> razao 0.984
+  arcom  [   m*s]  media +0.19681 IC95 [+0.09039, +0.30324] p=0.0009
+                   mediana +0.03769  frac>0 0.531  media s/ decil sup -0.08362
+                   medianas: base 1.88704 vs B2 1.91416  -> razao 0.986
+  frac   [  adim]  media -0.00068 IC95 [-0.00773, +0.00636] p=0.8426
+                   mediana +0.00000  frac>0 0.117  media s/ decil sup -0.02330
+                   medianas: base 0.83333 vs B2 0.83333  -> razao 1.000
+  por taxa (area):
+       6/min  n=113   media +0.02153 IC95 [-0.00197, +0.04503] p=0.0669  mediana +0.00321  frac>0 0.549
+      12/min  n=202   media +0.01997 IC95 [+0.00435, +0.03560] p=0.0193  mediana +0.00021  frac>0 0.500
+      24/min  n=363   media +0.03990 IC95 [+0.00444, +0.07536] p=0.0324  mediana +0.01092  frac>0 0.540
