@@ -24,22 +24,52 @@ P4 -- A ENTRADA espuria interage com as ENTRADAS legitimas (retornos reais).
   Reportar espurias/legitimas por celula. REGRA DE CLASSIFICACAO, fixada aqui
   antes do dado:
 
-    PRIMARIA (por IDENTIDADE). Reconstroi-se o conjunto vivo ao longo do tempo
-    dos failure_start/failure_end. Para um evento ENTRADA que aterrissou, com
-    originador o (prefixo do event_id) e instante t (primeira conclusao):
-      candidato = primeiro no' apos o, em ordem ciclica de id, VIVO em t
-                  (isto e', o sucessor nominal do originador naquele instante)
+    PRIMARIA (por IDENTIDADE ANGULAR) -- ver EMENDA abaixo. Reconstroi-se o
+    conjunto vivo ao longo do tempo dos failure_start/failure_end. Para um evento
+    ENTRADA que aterrissou, com originador o (prefixo do event_id) e instante t
+    (primeira conclusao):
+      candidato = sucessor ANGULAR de o em t -- proximo no' no sentido CCW pela
+                  posicao MEDIDA (theta_rel da telemetria), entre os vivos
       LEGITIMA  se o candidato tem failure_end em [t-W, t]
       ESPURIA   caso contrario
     Identidade mata a coincidencia que a contagem nao mata (retorno do agente X
-    coincidindo no tempo com ENTRADA espuria do agente Y). Nao exige
-    instrumentacao nova: o originador esta no event_id e a ordem do anel segue a
-    ordem dos ids -- premissa ja usada nas fases (i)/(i-b), onde o sucessor da
-    vitima foi vitima+1 nas 8 sementes.
+    coincidindo no tempo com ENTRADA espuria do agente Y).
 
-    SECUNDARIA (por CONTAGEM, declarada como sensibilidade). LEGITIMA se o total
-    de vivos reconstruido AUMENTOU em [t-W, t]. Reportada lado a lado; a
-    divergencia entre as duas mede a taxa de coincidencia.
+    ---------------------------------------------------------------------------
+    EMENDA PRE-ANALISE -- 2026-08-03, ANTES de qualquer dado da fase (ii) ser
+    lido. Nao ha resultados da grade: nenhuma das 80 celulas rodou. A unica
+    leitura previa e' a celula de FUMACA (c=1.61, fd=0.25, semente 0), declarada
+    aqui, cujo valor com a regra pre-emenda foi 42 espurias / 8 legitimas.
+
+    A regra primaria usava a ordem CICLICA DE IDS para achar o sucessor. Isso
+    esta errado: ids nao identificam posicao no anel. A ordenacao do sistema e'
+    GEOMETRICA (o controlador escolhe pred/succ por angulo, com histerese) e nada
+    preserva a coincidencia entre ordem de id e ordem angular depois de t=0 --
+    menos ainda sob churn, onde vaos de ~2x o ideal e a re-uniformizacao movem
+    agentes atraves das posicoes uns dos outros. Nas fases (i)/(i-b) a
+    coincidencia valeu (obito unico, anel uniforme, sucessor = vitima+1 nas 8
+    sementes), e foi dai que a premissa entrou -- indevidamente generalizada.
+
+    A primaria passa a ser o sucessor ANGULAR MEDIDO. A regra por ID fica como
+    SENSIBILIDADE, ao lado da contagem, em W e 2W.
+
+    SENTINELA order_swap_frac: fracao das amostras (a cada 1 s) em que a ordem
+    angular dos vivos difere da sequencia ciclica de ids, comparadas como
+    sequencias CICLICAS. Quantifica, por rodada, o quanto a premissa antiga
+    estava errada. 0.0 = as duas ordens coincidem sempre, e nesse caso as duas
+    classificacoes tem de coincidir tambem -- se divergirem com swap=0, ha bug.
+
+    Consequencia de implementacao: a classificacao passa a exigir o
+    agent_telemetry.csv (theta_rel), que este runner apaga apos extrair esforco.
+    A leitura foi movida para ANTES da remocao.
+    ---------------------------------------------------------------------------
+
+    SENSIBILIDADE 1 (por ID, regra pre-emenda). Primeiro no' apos o em ordem
+    ciclica de id, vivo em t.
+
+    SENSIBILIDADE 2 (por CONTAGEM). LEGITIMA se o total de vivos reconstruido
+    AUMENTOU em [t-W, t]. A divergencia entre as tres mede a taxa de
+    coincidencia (contagem) e o erro da premissa de ordem (id).
 
     W = AGENT_STATE_TIMEOUT + 0.5 s. Reportado tambem em 2W como sensibilidade.
     W ACOMPANHA O TRATAMENTO (0.25 vs 1.0 s), logo a resolucao do classificador
@@ -80,6 +110,7 @@ Uso:
     #      CCS_BUDGET="150"  CCS_METHODS="baseline,dual_pulse"  CCS_TAG=""
     #      CCS_DRY_RUN="1"
 """
+import math
 import os
 import subprocess
 import sys
@@ -242,8 +273,74 @@ def assert_cell(label, run_dir, stdout, fd_timeout):
 # classificacao das ENTRADAs (P4)
 # ---------------------------------------------------------------------------
 
-def classify_entradas(ev, fd_timeout, n_agents):
-    """Espurias vs legitimas, por IDENTIDADE (primaria) e por CONTAGEM (sensibilidade)."""
+def _snapshot_thetas(at_df, t, dt):
+    """{node_id: theta} na amostra mais proxima de t. {} se nao houver."""
+    ts = at_df["timestamp"].to_numpy(float)
+    if not ts.size:
+        return {}
+    i = int(np.argmin(np.abs(ts - t)))
+    t_near = ts[i]
+    if abs(t_near - t) > 5.0 * dt:
+        return {}
+    sel = at_df[np.isclose(at_df["timestamp"].to_numpy(float), t_near)]
+    return {int(r): float(th) for r, th in zip(sel["node_id"], sel["theta_rel"])}
+
+
+def angular_successor(thetas, iv, origin, t):
+    """Sucessor ANGULAR (CCW) do originador entre os vivos, medido da telemetria.
+
+    Emenda de 2026-08-03: a regra primaria do P4 usava a ordem ciclica de IDs.
+    Ids nao identificam posicao no anel -- a ordenacao do sistema e' geometrica e
+    nada preserva a coincidencia com os ids depois de t=0. Aqui o sucessor sai
+    das posicoes medidas.
+    """
+    live = {nid: th for nid, th in thetas.items()
+            if not dead_at(iv, nid, t) and math.isfinite(th)}
+    if origin not in live or len(live) < 2:
+        return None
+    order = sorted(live.items(), key=lambda kv: kv[1] % (2.0 * math.pi))
+    ids = [nid for nid, _ in order]
+    return ids[(ids.index(origin) + 1) % len(ids)]
+
+
+def order_swap_fraction(at_df, ev, n_agents, dt, sample_every=1.0):
+    """Fracao das amostras em que a ordem ANGULAR difere da sequencia ciclica de ids.
+
+    Sentinela da emenda: quantifica quanto a premissa antiga (anel ordenado por
+    id) estava errada nesta rodada. 0.0 = as duas ordens coincidem sempre.
+    """
+    if at_df is None or not len(at_df):
+        return float("nan")
+    iv = alive_intervals(ev)
+    ts_all = np.unique(at_df["timestamp"].to_numpy(float))
+    if not ts_all.size:
+        return float("nan")
+    step = max(1, int(round(sample_every / max(dt, 1e-9))))
+    diff = total = 0
+    for t in ts_all[::step]:
+        th = _snapshot_thetas(at_df, float(t), dt)
+        live = {nid: v for nid, v in th.items()
+                if not dead_at(iv, nid, float(t)) and math.isfinite(v)}
+        if len(live) < 3:
+            continue
+        by_ang = [nid for nid, _ in sorted(live.items(), key=lambda kv: kv[1] % (2.0 * math.pi))]
+        by_id = sorted(live.keys())
+        # comparacao CICLICA: rotaciona a sequencia de ids para comecar no mesmo no'
+        k = by_id.index(by_ang[0])
+        rot = by_id[k:] + by_id[:k]
+        total += 1
+        diff += int(rot != by_ang)
+    return (diff / total) if total else float("nan")
+
+
+def classify_entradas(ev, fd_timeout, n_agents, at_df=None, dt=0.05):
+    """Espurias vs legitimas.
+
+    PRIMARIA  = identidade pelo sucessor ANGULAR medido (emenda 2026-08-03).
+    SENSIB. 1 = identidade pela ordem ciclica de IDs (regra pre-emenda).
+    SENSIB. 2 = contagem de vivos na janela.
+    Todas em W e 2W.
+    """
     types = ev["event_type"].astype(str)
     landed = ev[types.str.startswith("dual_pulse_event_completed")
                 | types.str.startswith("dual_pulse_self_shift")]
@@ -270,28 +367,41 @@ def classify_entradas(ev, fd_timeout, n_agents):
 
     for wmul, suf in ((1.0, ""), (2.0, "_2w")):
         W = (float(fd_timeout) + 0.5) * wmul
-        legit_id = spur_id = legit_cnt = spur_cnt = 0
+        legit_ang = spur_ang = legit_id = spur_id = legit_cnt = spur_cnt = ang_undef = 0
         for eid, t in first_t.items():
             o = origin.get(eid)
-            # --- PRIMARIA: identidade do sucessor nominal vivo em t
+            # --- PRIMARIA (emenda): sucessor ANGULAR medido
+            ok_ang = False
+            if o is not None and at_df is not None:
+                cand = angular_successor(_snapshot_thetas(at_df, t, dt), iv, o, t)
+                if cand is None:
+                    ang_undef += 1
+                else:
+                    ok_ang = any(cand == int(nid) and t - W <= te <= t for te, nid in ends)
+            if ok_ang:
+                legit_ang += 1
+            else:
+                spur_ang += 1
+            # --- SENSIBILIDADE 1 (pre-emenda): sucessor pela ordem ciclica de ids
             ok_id = False
             if o is not None:
                 for step in range(1, n_agents + 1):
-                    cand = 2 + ((o - 2 + step) % n_agents)
-                    if not dead_at(iv, cand, t):
-                        ok_id = any(cand == int(nid) and t - W <= te <= t for te, nid in ends)
+                    c_id = 2 + ((o - 2 + step) % n_agents)
+                    if not dead_at(iv, c_id, t):
+                        ok_id = any(c_id == int(nid) and t - W <= te <= t for te, nid in ends)
                         break
             if ok_id:
                 legit_id += 1
             else:
                 spur_id += 1
-            # --- SECUNDARIA: a contagem de vivos subiu na janela?
-            grew = any(t - W <= te <= t for te, _ in ends)
-            if grew:
+            # --- SENSIBILIDADE 2: a contagem de vivos subiu na janela?
+            if any(t - W <= te <= t for te, _ in ends):
                 legit_cnt += 1
             else:
                 spur_cnt += 1
         out.update({f"ent_total{suf}": len(first_t),
+                    f"ent_legit_ang{suf}": legit_ang, f"ent_spur_ang{suf}": spur_ang,
+                    f"ent_ang_undef{suf}": ang_undef,
                     f"ent_legit_id{suf}": legit_id, f"ent_spur_id{suf}": spur_id,
                     f"ent_legit_cnt{suf}": legit_cnt, f"ent_spur_cnt{suf}": spur_cnt,
                     f"ent_W{suf}": W})
@@ -321,7 +431,7 @@ def close_time_after_last_event(t, g, thr, t_last):
     return float(tt[last + 1] - t_last)
 
 
-def metrics_from_run(run_dir, fd_timeout):
+def metrics_from_run(run_dir, fd_timeout, at_df=None):
     tgt = os.path.join(run_dir, "target_telemetry.csv")
     evp = os.path.join(run_dir, "events.csv")
     if not os.path.exists(tgt):
@@ -370,7 +480,8 @@ def metrics_from_run(run_dir, fd_timeout):
         seqs = [int(i.split("_")[1]) for i in ids.unique()
                 if len(i.split("_")) == 2 and i.split("_")[1].isdigit()]
         m["dp_seq_max"] = max(seqs) if seqs else 0
-        m.update(classify_entradas(ev, fd_timeout, N))
+        m.update(classify_entradas(ev, fd_timeout, N, at_df=at_df, dt=DT))
+        m["order_swap_frac"] = order_swap_fraction(at_df, ev, N, DT)
     return m
 
 
@@ -430,12 +541,21 @@ def run_cell(method, rng_aa, fd_timeout, seed):
 
     checks = assert_cell(label, run_dir, proc.stdout, fd_timeout)   # aborta o sweep
 
-    m = metrics_from_run(run_dir, fd_timeout)
+    # A ordenacao angular vem do agent_telemetry.csv, que este runner apaga.
+    # Ler ANTES: a emenda de 2026-08-03 exige o sucessor medido, nao o id.
+    agent_csv = os.path.join(run_dir, "agent_telemetry.csv")
+    at_df = None
+    if os.path.exists(agent_csv):
+        try:
+            at_df = pd.read_csv(agent_csv, usecols=["node_id", "timestamp", "theta_rel"])
+        except Exception as exc:
+            print(f"\n     [aviso] nao consegui ler theta_rel: {exc}")
+
+    m = metrics_from_run(run_dir, fd_timeout, at_df=at_df)
     if not m:
         print(f" FALHOU (rc={proc.returncode})")
         return None, None
 
-    agent_csv = os.path.join(run_dir, "agent_telemetry.csv")
     m.update(effort_metrics(agent_csv, t0=STEADY_T0, vmax=VMAX))
     try:
         os.remove(agent_csv)
@@ -454,7 +574,8 @@ def run_cell(method, rng_aa, fd_timeout, seed):
     print(f" egap={m.get('egap_mean_steady20', nan):.4f}"
           f"  fr125={m.get('frac_gmax_gt125_steady20', nan):.2f}"
           f"  cens125={m.get('censored_125')}"
-          f"  ENTesp/leg={m.get('ent_spur_id', 0)}/{m.get('ent_legit_id', 0)}"
+          f"  ENTesp/leg={m.get('ent_spur_ang', 0)}/{m.get('ent_legit_ang', 0)}"
+          f"  swap={m.get('order_swap_frac', float('nan')):.2f}"
           f"  ev={len(ev_rows)}")
     return m, ev_rows
 
@@ -600,20 +721,25 @@ def report(df, evdf):
                   f"{_med(g, 'n_landed_events'):>7.0f} {_med(g, 'dp_seq_max'):>8.0f}")
 
     print("\n=== P4: ENTRADAs espurias / legitimas (B2, soma sobre as sementes) ===")
-    print("  IDENT = primaria (sucessor nominal vivo do originador tem failure_end na janela)")
-    print("  CONT  = sensibilidade por contagem; divergencia IDENT-CONT = taxa de coincidencia")
-    print(f"{'range':>7} {'c':>5} {'fd':>5} | {'IDENT esp/leg':>16} {'razao':>7} | "
-          f"{'CONT esp/leg':>15} | {'IDENT 2W esp/leg':>17}")
+    print("  ANG  = PRIMARIA (emenda 2026-08-03): sucessor ANGULAR medido do originador")
+    print("  ID   = sensibilidade, regra pre-emenda (ordem ciclica de ids)")
+    print("  CONT = sensibilidade por contagem de vivos")
+    print("  swap = order_swap_frac: fracao do tempo com ordem angular != ordem de id")
+    print("         (swap=0 => ANG e ID tem de coincidir; divergirem ali seria bug)")
+    print(f"{'range':>7} {'c':>5} {'fd':>5} | {'ANG esp/leg':>14} {'razao':>7} | "
+          f"{'ANG 2W':>12} | {'ID esp/leg':>13} | {'CONT esp/leg':>14} | {'swap':>5} {'undef':>6}")
     for rng in sorted(df.range_aa.unique()):
         for fd in sorted(df[df.range_aa == rng].fd_timeout.unique()):
             g = df[(df.range_aa == rng) & (df.fd_timeout == fd) & (df.method == "B2")]
             if not len(g):
                 continue
-            esp, leg = _sum(g, "ent_spur_id"), _sum(g, "ent_legit_id")
+            esp, leg = _sum(g, "ent_spur_ang"), _sum(g, "ent_legit_ang")
             ratio = (esp / leg) if leg else float("inf")
-            print(f"{rng:>7g} {c_units(rng):>5.2f} {fd:>5g} | {esp:>7.0f}/{leg:<8.0f} {ratio:>7.2f} | "
-                  f"{_sum(g, 'ent_spur_cnt'):>6.0f}/{_sum(g, 'ent_legit_cnt'):<8.0f} | "
-                  f"{_sum(g, 'ent_spur_id_2w'):>8.0f}/{_sum(g, 'ent_legit_id_2w'):<8.0f}")
+            print(f"{rng:>7g} {c_units(rng):>5.2f} {fd:>5g} | {esp:>6.0f}/{leg:<7.0f} {ratio:>7.2f} | "
+                  f"{_sum(g, 'ent_spur_ang_2w'):>5.0f}/{_sum(g, 'ent_legit_ang_2w'):<6.0f} | "
+                  f"{_sum(g, 'ent_spur_id'):>5.0f}/{_sum(g, 'ent_legit_id'):<7.0f} | "
+                  f"{_sum(g, 'ent_spur_cnt'):>6.0f}/{_sum(g, 'ent_legit_cnt'):<7.0f} | "
+                  f"{_med(g, 'order_swap_frac'):>5.2f} {_sum(g, 'ent_ang_undef'):>6.0f}")
 
     if evdf is not None and len(evdf):
         print("\n=== pico de G_max POR EVENTO (aggregate_gmax.event_rows, janela adaptativa) ===")
