@@ -31,13 +31,22 @@ terceira le a telemetria do alvo:
 
 Metricas: as MESMAS de run_breach_window.py (gmax_peak, t_close_125/110,
 breach_area, egap_final), para que esta fase seja comparavel com a campanha de
-breach ja publicada, em vez de introduzir uma definicao concorrente.
+breach ja publicada, em vez de introduzir uma definicao concorrente. Mais
+esforco/saturacao/fairness (M5/M6/M2) via metrics_util.effort_metrics.
+
+POLITICA DE TELEMETRIA: o agent_telemetry.csv de cada celula e' lido para as
+metricas de esforco e APAGADO em seguida, sem flag de retencao. ~15 MB por
+celula (1.2 GB num sweep de 80), deterministico e regeneravel em ~30 s no
+commit que o run_manifest.json grava. Guardar essa massa para evitar meia
+hora de re-execucao eventual e' troca ruim, e toda flag de retencao que
+alguem esquece custa um gigabyte.
 
 Uso:
     python experiments/scaling_law/run_comm_range_sweep.py
     # env: CRS_RANGES="6.3,8.4,10.4,15.7,26.1"  CRS_UPLINK="200"
     #      CRS_N="24"  CRS_SEEDS="0,1,2,3,4,5,6,7"  CRS_BUDGET="90"
     #      CRS_METHODS="baseline,dual_pulse"  CRS_TAU="1.0"  CRS_TAG=""
+    #      CRS_FD_TIMEOUT="0.25"  CRS_VMAX="10"  CRS_PROGRESS_EVERY="10"
     #      CRS_DRY_RUN="1"   (imprime a grade e sai, sem simular)
 """
 import math
@@ -51,7 +60,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from metrics_util import run_provenance  # noqa: E402
+from metrics_util import effort_metrics, run_provenance  # noqa: E402
 
 EXP_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(os.path.dirname(EXP_DIR))
@@ -90,6 +99,10 @@ PROGRESS_EVERY = max(1, int(os.environ.get("CRS_PROGRESS_EVERY", "10")))
 # um vizinho morto -- por isso a fase (i-b) varre 20*dt (o FD-fix da campanha de
 # comunicacao) nos mesmos pontos curtos, para separar detector de alcance.
 FD_TIMEOUT = float(os.environ.get("CRS_FD_TIMEOUT", str(5.0 * DT)))
+# Velocidade maxima: fixada no filho E usada para normalizar esforco/saturacao.
+# As duas TEM de ser o mesmo numero -- se o default do config_param mudasse, as
+# rodadas mudariam e a normalizacao da metrica nao, em silencio.
+VMAX = float(os.environ.get("CRS_VMAX", "10.0"))
 
 # Mesmos limiares do run_breach_window: 1.25 = primario, 1.10 = estrito.
 THR_PRIMARY = 1.25
@@ -409,6 +422,7 @@ def run_cell(method, rng_aa, seed):
         "CONTROL_PERIOD": f"{DT:g}",
         "AGENT_STATE_TIMEOUT": f"{FD_TIMEOUT:g}",
         "K_E_TAU": f"{250.0 / N:.6f}",
+        "VM_MAX_SPEED_XY": f"{VMAX:g}",
         "EXPERIMENT_SEED": str(seed),
         "EXPERIMENT_REPRODUCIBLE": "True",
         "METRICS_T0": "0.0",
@@ -453,6 +467,21 @@ def run_cell(method, rng_aa, seed):
     if not m or "error" in m:
         print(f" FALHOU (rc={proc.returncode}) {m.get('error', '')}\n{(proc.stderr or '')[-500:]}")
         return None
+
+    # Esforco / saturacao / fairness (M5/M6/M2) ANTES de apagar o
+    # agent_telemetry.csv -- e' a unica fonte deles. A politica e' EXTRAIR e
+    # apagar, sem flag de retencao: o arquivo custa ~15 MB por celula (1.2 GB
+    # num sweep de 80), e' deterministico e regeneravel em ~30 s no commit que
+    # o manifesto grava, e a pericia desta campanha sempre veio do events.csv,
+    # que fica. Apagar um arquivo que ninguem le e' correto; o defeito era nao
+    # le-lo -- 112 celulas geraram M5/M6/M2 que foram descartados em silencio.
+    agent_csv = os.path.join(run_dir, "agent_telemetry.csv")
+    m.update(effort_metrics(agent_csv, t0=T_FAIL, vmax=VMAX))
+    try:
+        os.remove(agent_csv)
+    except OSError:
+        pass
+
     m.update(checks)
     m.update({"method": tag, "N": N, "radius": R_ENC, "range_aa": rng_aa, "range_at": UPLINK,
               "c_hops": c_units(rng_aa), "c_hops_post": c_units_post(rng_aa),
