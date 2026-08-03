@@ -84,8 +84,36 @@ A2 SOB CHURN -- a assercao de uplink, redefinida.
   que o alive_count do alvo o acompanhe com atraso limitado.
     TOLERANCIA = AGENT_STATE_TIMEOUT + 2*dt   (numerica, fixada aqui; 0.35 s no
     braco de 0.25 e 1.10 s no braco de 1.0)
-  Viola se o alvo relatar MENOS vivos do que a verdade por mais que a
-  tolerancia. Relatar mais que a verdade tambem viola (nunca deveria acontecer).
+  Viola se o alvo sair da faixa [piso, teto] definida abaixo.
+
+  ---------------------------------------------------------------------------
+  2a EMENDA PRE-ANALISE -- 2026-08-03, ainda ANTES de qualquer resultado da
+  grade. Duas celulas (baseline/B2, c=1.61, fd=0.25, semente 0) chegaram a rodar
+  e sao DESCARTADAS: o diretorio de trabalho e o parcial foram apagados e as 80
+  serao refeitas sob um unico commit, para nao haver linhas com proveniencia
+  divergente no mesmo CSV.
+
+  As duas primeiras versoes da A2 estavam erradas, e pelo mesmo motivo de fundo:
+  eu modelava a contagem do alvo como "a verdade, defasada". Nao e'. O alvo
+  conta o agente a em t se e so se a emitiu em algum r <= t com t-r <= timeout,
+  e a emite enquanto vivo. Portanto
+       contado(t) ~= |{a : a esteve vivo em ALGUM instante de [t-tol, t]}|
+  isto e', a UNIAO dos vivos na janela -- nao a verdade instantanea (v1) nem o
+  maximo da verdade na janela (v2).
+
+  O contraexemplo que derrubou a v2 esta no dado: em t=114.50 o no' 4 VOLTA e o
+  no' 7 MORRE no mesmo instante. A verdade fica em 23 durante toda a janela,
+  entao max(verdade)=23, mas o alvo ve 24 sem nada estar corrompido -- ainda
+  conta o 7 (morto ha 0.10 s, poda em +0.25) e ja ouviu o 4. Mortes e retornos
+  simultaneos se SOMAM na contagem do alvo; um maximo instantaneo nao os
+  compoe.
+
+  Modelo final, por superposicao:
+      teto(t) = |{a vivo em ALGUM instante de [t - (timeout + 2*dt), t]}|
+      piso(t) = |{a vivo em TODOS os instantes de [t - 2*dt, t]}|
+  A TOLERANCIA NUMERICA nao muda (timeout + 2*dt); o que muda e' como ela e'
+  aplicada. Viola se seen > teto ou seen < piso.
+  ---------------------------------------------------------------------------
 
 METRICAS -- primaria e' o erro medio em regime, nao t_close.
   Sob churn contínuo nao ha assentamento (precedente: run_churn_sweep) e a
@@ -197,6 +225,35 @@ def dead_at(intervals, node_id, t):
     return any(a <= t < b for a, b in intervals.get(int(node_id), []))
 
 
+def _union_intersection_alive(ev, timestamps, n_agents, tol_hi, tol_lo):
+    """(piso, teto) para o alive_count do alvo, por superposicao.
+
+    teto[i] = quantos agentes estiveram vivos em ALGUM instante de [t-tol_hi, t]
+              (o alvo ainda pode estar contando cada um deles)
+    piso[i] = quantos estiveram vivos em TODOS os instantes de [t-tol_lo, t]
+              (esses o alvo ja tem de ter ouvido)
+    """
+    t = np.asarray(timestamps, float)
+    iv = alive_intervals(ev)
+    dt = float(np.median(np.diff(t))) if t.size > 1 else 0.05
+    k_hi = max(1, int(round(tol_hi / dt)) + 1)
+    k_lo = max(1, int(round(tol_lo / dt)) + 1)
+    hi = np.zeros(t.size)
+    lo = np.zeros(t.size)
+    idx = np.arange(t.size)
+    for nid in range(2, 2 + n_agents):
+        alive = np.ones(t.size, dtype=float)
+        for a, b in iv.get(nid, []):
+            alive[(t >= a) & (t < b)] = 0.0
+        cs = np.concatenate([[0.0], np.cumsum(alive)])
+        for k, acc, want_all in ((k_hi, hi, False), (k_lo, lo, True)):
+            lo_i = np.maximum(0, idx + 1 - k)
+            wsum = cs[idx + 1] - cs[lo_i]
+            wlen = (idx + 1 - lo_i).astype(float)
+            acc += (wsum == wlen) if want_all else (wsum > 0)
+    return lo, hi
+
+
 def true_alive_series(ev, timestamps, n_agents):
     """Numero VERDADEIRO de vivos em cada instante, dos eventos."""
     iv = alive_intervals(ev)
@@ -235,18 +292,18 @@ def assert_cell(label, run_dir, stdout, fd_timeout):
 
     # TOLERANCIA numerica, fixada no pre-registro: timeout + 2*dt.
     tol_s = float(fd_timeout) + 2.0 * DT
-    # O alvo atrasa em relacao a verdade nos DOIS sentidos, e a tolerancia tem de
-    # ser bilateral: depois de uma morte ele ainda conta o morto ate o timeout
-    # expirar (ve MAIS que a verdade), e depois de um retorno leva um instante
-    # para ouvi-lo (ve MENOS). Comparar o excesso contra a verdade INSTANTANEA,
-    # como na primeira versao, aborta na primeira celula por latencia normal --
-    # foi o que a fumaca pegou (alvo 22, verdade 20, com tol=0.35s).
-    # Piso e teto defasados na janela [t-tol, t]:
-    lo, hi = np.copy(truth), np.copy(truth)
-    for i, ti in enumerate(t):
-        w = (t >= ti - tol_s) & (t <= ti)
-        if w.any():
-            lo[i], hi[i] = truth[w].min(), truth[w].max()
+    # MODELO DA SENTINELA (2a emenda -- ver o bloco de pre-registro).
+    # A contagem do alvo NAO e' a verdade em algum instante da janela: e' uma
+    # SUPERPOSICAO. O alvo conta o agente a em t se e so se a emitiu em algum
+    # r <= t com t - r <= timeout, e a emite enquanto vivo. Logo:
+    #     contado(t) ~= |{a : a esteve vivo em ALGUM instante de [t-tol, t]}|
+    # que e' a UNIAO dos vivos na janela, nao o maximo instantaneo. A diferenca
+    # e' real e derrubou o sweep: em t=114.5 o no' 4 volta E o no' 7 morre, a
+    # verdade fica em 23 na janela inteira (max=23), mas o alvo ve 24 -- ainda
+    # conta o 7 (morto ha 0.10 s) e ja ouviu o 4. Sem violacao alguma.
+    # Piso simetrico: quem esteve vivo o tempo TODO na janela curta tem de estar
+    # contado (um recem-voltado pode ainda nao ter emitido).
+    lo, hi = _union_intersection_alive(ev, t, N, tol_s, 2.0 * DT)
     mask = t >= max(STEADY_T0, tol_s)
     dmax = emax = float("nan")
     if mask.any():
