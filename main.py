@@ -230,23 +230,18 @@ def main():
         delay=delay,
         failure_rate=failure_rate,
     )
+    comm_handler = None
     if COMM_ROLE_AWARE_RANGES:
         # Asymmetric ranges per (sender, receiver) role. See comm_role_aware for
         # why this cannot be done with a sender-side radio.
-        builder.add_handler(
-            RoleAwareCommunicationHandler(
-                medium,
-                range_matrix=agent_target_range_matrix(
-                    agent_agent=COMM_RANGE_AGENT_AGENT,
-                    agent_target=COMM_RANGE_AGENT_TARGET,
-                ),
-            )
+        comm_handler = RoleAwareCommunicationHandler(
+            medium,
+            range_matrix=agent_target_range_matrix(
+                agent_agent=COMM_RANGE_AGENT_AGENT,
+                agent_target=COMM_RANGE_AGENT_TARGET,
+            ),
         )
-        print(
-            f"[comm] role-aware ranges: agent<->agent={COMM_RANGE_AGENT_AGENT:g} m, "
-            f"agent<->target={COMM_RANGE_AGENT_TARGET:g} m, "
-            f"other links={transmission_range:g} m"
-        )
+        builder.add_handler(comm_handler)
     else:
         builder.add_handler(CommunicationHandler(medium))
 
@@ -290,6 +285,14 @@ def main():
         builder.add_node(AgentProtocol, (x, y, z))
 
     simulation = builder.build()
+
+    # Emitted only after build(), because that is when the builder registers the
+    # nodes and the handler can resolve their roles. Sweep runners parse this
+    # line to assert the matrix is not a no-op and that no role came back
+    # unknown -- both are silent data-corrupting misconfigurations otherwise.
+    if comm_handler is not None:
+        print(comm_handler.describe(), flush=True)
+
     simulation.start_simulation()
 
     # Post-simulation analysis: print metrics, render per-node telemetry plots,

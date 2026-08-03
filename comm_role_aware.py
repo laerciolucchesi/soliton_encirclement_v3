@@ -156,6 +156,45 @@ class RoleAwareCommunicationHandler(CommunicationHandler):
         pair = (self.get_role(source_id), self.get_role(destination_id))
         return float(self._media.get(pair, self.default_medium).transmission_range)
 
+    # -- introspection, for sweep preflight assertions -------------------------
+
+    def role_census(self) -> Dict[str, int]:
+        """``{role: count}`` over registered nodes. A non-zero ``unknown`` means a
+        protocol class the matrix cannot address, so its links silently keep the
+        default range -- a sweep must abort on it, not average over it."""
+        census: Dict[str, int] = {}
+        for role in self._roles.values():
+            census[role] = census.get(role, 0) + 1
+        return census
+
+    def differs_from_default(self) -> bool:
+        """True when at least one pair actually departs from the default range.
+
+        Guards the no-op run: gate enabled but every range left at the global
+        value, which produces a fully connected run wearing a role-aware label.
+        """
+        default_range = float(self.default_medium.transmission_range)
+        return any(m.transmission_range != default_range for m in self._media.values())
+
+    def describe(self) -> str:
+        """One machine-readable line for runners to parse and assert on.
+
+        Stable, sorted, greppable::
+
+            [comm] role_aware=1 roles={agent:24,adversary:1,target:1} \
+matrix={agent>agent:6.3,agent>target:200,target>agent:200} default=200 differs=1
+        """
+        roles = ",".join(f"{role}:{count}" for role, count in sorted(self.role_census().items()))
+        matrix = ",".join(
+            f"{src}>{dst}:{medium.transmission_range:g}"
+            for (src, dst), medium in sorted(self._media.items())
+        )
+        return (
+            f"[comm] role_aware=1 roles={{{roles}}} matrix={{{matrix}}} "
+            f"default={self.default_medium.transmission_range:g} "
+            f"differs={int(self.differs_from_default())}"
+        )
+
     # -- delivery -------------------------------------------------------------
 
     def _transmit_message(
