@@ -1044,3 +1044,57 @@ flap injects a fresh SAIDA/ENTRADA, coverage returns ABOVE 1.0 and peaks reach 8
 false-storm pathology already documented under packet loss. That row is contaminated by the
 detector and must not be read as mechanism failure. Phase (i-b): re-run 6.3 and 8.4 m at 20·dt
 (32 cells, ~28 min) to separate detector from range. NOT YET RUN.
+
+---
+
+## 2026-08-03 — Phase 8a (i-b): it is the range, not the detector — and the FD-fix has a price
+
+**Hypothesis / why.** Phase (i) pinned `AGENT_STATE_TIMEOUT` at 5·dt, copied from
+`run_breach_window`, which uses that value BECAUSE its channel is ideal. Phase (i)'s channel is
+degraded by construction and to a failure detector an out-of-range neighbour is indistinguishable
+from a dead one, so its shortest point was possibly measuring the detector rather than the range.
+
+**Pre-registration** (written into `analyze_comm_range_ib.py` before the grid ran).
+*P1* — the B2 inversion at 8.4 m persists with the long timeout, because the successor's
+abstention is geometry, not detection. *P2* — the closing cliff may move left; if it does not, it
+is pure range.
+
+**Experiment.** Same runner, same three assertions, 6.3 and 8.4 m × 8 paired seeds × both
+methods = 32 cells at 20·dt = 1.0 s. All rows `dirty=False`. `comm_range_results_ib.csv`;
+comparison in `analyze_comm_range_ib.py`, write-up in [COMM_RANGE.md](COMM_RANGE.md) §4b.
+
+**P1 — CONFIRMED, more strongly than asked.** The inversion persists (0.51× → 0.56×), but the
+decisive part is that the event structure is *identical*: landed SAIDA 0, landed ENTRADA 1,
+seq_max 2, hop_sum 23, coverage 22/23, successor not completed — all 8 seeds, both phases.
+Quadrupling the detector's tolerance changes nothing about which events fire, because the
+successor genuinely enters the originator's neighbour set when the ring contracts. No timeout can
+make a present node look absent. Trigger semantics, not tuning.
+
+**P2 — CONFIRMED as pure range.** 0/16 cells close at 6.3 m in either phase.
+
+**Unpredicted, and the reusable part: the FD-fix costs exactly its own timeout.** Both methods
+slowed by the size of the timeout increase — baseline 3.27 → 4.00 s, B2 6.45 → 7.20 s, against a
++0.75 s change. The baseline runs no overlay, so this is the detector alone: the timeout enters
+`t_close` ADDITIVELY, as pure detection latency. At 6.3 m the same cost appears in the peak
+(median 2.022 → 2.133; per seed 6 worse, 2 tied, 0 better).
+
+The loss campaign could not have seen this: with infinite range the only cause of silence was
+packet loss, so a longer timeout was pure robustness. With finite range there is a SECOND
+population of silent neighbours — the permanently out-of-range ones — and for those a longer
+timeout is pure delay, the agent holding formation against a neighbour that is not there.
+**`AGENT_STATE_TIMEOUT` is not a robustness dial to be maximised; it arbitrates between two causes
+of silence and only one had been measured.** Any future FD-fix recommendation must state which
+regime it is for.
+
+Nuance worth keeping: at 6.3 m the long timeout does NOT reduce the topology flapping itself
+(median `topo_injections` 572 → 665). It reduces how many spurious dual_pulse events LAND (max
+landed ENTRADA 66 → 14, seq_max 42 → 25).
+
+**Process defects found and fixed.** (a) One cell in 32 wrote a row with NO provenance columns at
+all — `run_provenance` returns `{}` both when the manifest is missing and when the read fails, and
+under OneDrive sync the second happens; the manifest was intact on disk seconds later. Silent
+violation of campaign rule 5. The runner now retries and repairs any still-missing row from the
+manifest before writing the final CSV, and the affected row was recovered. (b) `metric_*.png` are
+rendered by `protocol_target.finish()` on EVERY cell of EVERY sweep — `SKIP_TELEMETRY_PLOTS` is
+honoured by `plot_telemetry.py` only. Not fixed here (it is campaign-wide, not specific to this
+phase), but it is wasted work in every runner.

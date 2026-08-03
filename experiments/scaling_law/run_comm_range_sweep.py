@@ -45,6 +45,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 import numpy as np
 import pandas as pd
@@ -113,15 +114,15 @@ def chord(k_hops, n=None, radius=None):
 
 
 def c_units(transmission_range):
-    """Alcance em unidades do acorde de 1 salto PRE-morte (N agentes)."""
+    """Alcance em unidades da corda de 1 salto PRE-morte (N agentes)."""
     return float(transmission_range) / chord(1)
 
 
 def c_units_post(transmission_range):
-    """Idem, mas no acorde POS-morte (N-1 agentes) -- a outra normalizacao em uso.
+    """Idem, mas na corda POS-morte (N-1 agentes) -- a outra normalizacao em uso.
 
-    As duas convivem nos documentos: o comentario do config_param normaliza pelo
-    acorde pos-morte (o anel que efetivamente tem de se manter conectado depois
+    As duas convivem nos documentos: o comentario do config_param normaliza pela
+    corda pos-morte (o anel que efetivamente tem de se manter conectado depois
     do evento), o plano desta fase normaliza pelo pre-morte. Diferem 4,3% em
     N=24 (5,221 vs 5,448 m). Toda saida imprime as DUAS, para nao haver uma
     quarta rodada de reconciliacao por definicao divergente entre documentos.
@@ -136,6 +137,25 @@ def victim_node_id(n, seed=0):
 
 class AssertionFailed(RuntimeError):
     """Invariante violado: aborta o sweep inteiro, a linha nao e' confiavel."""
+
+
+def provenance_with_retry(run_dir, attempts=3, pause=0.4):
+    """run_provenance com retentativa: o repositorio vive dentro do OneDrive.
+
+    run_provenance devolve {} tanto quando o manifesto nao existe quanto quando
+    a leitura falha, e sob sincronizacao do OneDrive a segunda causa acontece de
+    verdade -- medido: 1 celula em 32 na fase (i-b) saiu sem NENHUMA coluna de
+    proveniencia, e o manifesto estava intacto no disco segundos depois. Uma
+    linha sem git_dirty/seed viola a regra 5 da campanha em silencio, entao vale
+    insistir antes de desistir.
+    """
+    for i in range(attempts):
+        prov = run_provenance(run_dir)
+        if prov:
+            return prov
+        if i < attempts - 1:
+            time.sleep(pause)
+    return {}
 
 
 def parse_comm_marker(stdout):
@@ -286,7 +306,7 @@ def dual_pulse_coverage(run_dir, survivors):
     # LIMITE DA MEDIDA: o protocolo NAO registra a injecao do dual_pulse, so' as
     # conclusoes. Uma injecao cujos pulsos nunca completam para ninguem nao deixa
     # NENHUM rastro em events.csv -- e esse e' justamente o caso interessante
-    # abaixo do acorde de 2 saltos. Entao medimos por tres vias, nenhuma delas
+    # abaixo da corda de 2 saltos. Entao medimos por tres vias, nenhuma delas
     # uma contagem direta, e a discrepancia entre elas E' o sinal:
     #   topo_injections  numero de linhas 'pulse_injected' -- e' o fast_layer,
     #                    nao o dual_pulse (gatilho pred OU succ, com limiar de
@@ -438,7 +458,7 @@ def run_cell(method, rng_aa, seed):
               "c_hops": c_units(rng_aa), "c_hops_post": c_units_post(rng_aa),
               "tau_xy": TAU, "seed": seed, "victim": victim,
               "agent_state_timeout": FD_TIMEOUT, "dt": DT})
-    m.update(run_provenance(run_dir))
+    m.update(provenance_with_retry(run_dir))
     tc = m["t_close_125"]
     cov = m.get("dp_coverage")
     # NAO usar `cov or nan`: cobertura 0.0 e' falsy, e era justamente o caso
@@ -465,12 +485,12 @@ def iqr_row(series):
 
 def print_grid():
     print(f"Fase 8a (i): alcance do anel, N={N}, R={R_ENC:g} m, uplink={UPLINK:g} m")
-    print(f"  acorde 1 salto = {chord(1):.3f} m | 2 saltos = {chord(2):.3f} m | 3 saltos = {chord(3):.3f} m")
+    print(f"  corda 1 salto = {chord(1):.3f} m | 2 saltos = {chord(2):.3f} m | 3 saltos = {chord(3):.3f} m")
     print(f"  metodos={METHODS}  sementes={SEEDS}  dt={DT:g}  tau_a={TAU:g}  budget={BUDGET:g}s")
     print(f"  AGENT_STATE_TIMEOUT = {FD_TIMEOUT:g}s ({FD_TIMEOUT / DT:.0f} ticks)"          f"{'  <-- FD-fix da campanha de comunicacao' if FD_TIMEOUT >= 20 * DT else ''}")
     print(f"  celulas = {len(RANGES)} x {len(SEEDS)} x {len(METHODS)} = "
           f"{len(RANGES) * len(SEEDS) * len(METHODS)}")
-    print(f"\n  {'range_aa':>9} {'c=r/acorde1':>12} {'saltos alcancados':>18}")
+    print(f"\n  {'range_aa':>9} {'c=r/corda1':>12} {'saltos alcancados':>18}")
     for r in RANGES:
         hops = max([k for k in range(1, N // 2 + 1) if chord(k) <= r] + [0])
         print(f"  {r:>9g} {c_units(r):>12.3f} {hops:>18d}")
@@ -543,8 +563,8 @@ def report(df):
     print("\n=== penhasco, NAS DUAS NORMALIZACOES ===")
     print(f"  criterio fixado ex-ante: o maior c em que MENOS DA METADE das sementes fecha")
     print(f"  (t_close_125 finito dentro do budget de {BUDGET:g}s).")
-    print(f"  acorde de 1 salto pre-morte  (N={N}):   {chord(1):.3f} m  -> c_pre")
-    print(f"  acorde de 1 salto pos-morte  (N={N - 1}):   {chord(1, n=N - 1):.3f} m  -> c_pos")
+    print(f"  corda de 1 salto pre-morte  (N={N}):   {chord(1):.3f} m  -> c_pre")
+    print(f"  corda de 1 salto pos-morte  (N={N - 1}):   {chord(1, n=N - 1):.3f} m  -> c_pos")
     for meth in ("baseline", "B2"):
         ok_r, bad_r = [], []
         for rng in sorted(df["range_aa"].unique()):
@@ -576,6 +596,29 @@ def report(df):
           f"{'  <-- budget truncando o resultado, subir para ~150s na fase (ii)' if near else ''}")
     if len(finite):
         print(f"  maior t_close finito: {float(finite.max()):.2f}s")
+
+
+def repair_missing_provenance(df):
+    """Preenche linhas sem git_commit relendo o run_manifest.json da celula."""
+    if "git_commit" not in df.columns:
+        return df
+    missing = df["git_commit"].isna()
+    if not missing.any():
+        return df
+    rows = df.to_dict("records")
+    fixed = 0
+    for r in rows:
+        if not pd.isna(r.get("git_commit")):
+            continue
+        method = "dual_pulse" if r["method"] == "B2" else "baseline"
+        run_dir = os.path.join(RUNS_DIR, f"{method}_aa{r['range_aa']:g}_s{int(r['seed'])}")
+        prov = provenance_with_retry(run_dir)
+        if prov:
+            r.update(prov)
+            fixed += 1
+    print(f"\n[proveniencia] {int(missing.sum())} linha(s) sem manifesto na 1a leitura; "
+          f"{fixed} recuperada(s) na releitura.")
+    return pd.DataFrame(rows)
 
 
 def main():
@@ -615,6 +658,11 @@ def main():
     if df.empty:
         print("\nSem resultados.")
         return
+
+    # Reparo final: qualquer linha que tenha ficado sem proveniencia (I/O
+    # transitorio do OneDrive) e' relida do manifesto que o filho ja gravou.
+    df = repair_missing_provenance(df)
+
     report(df)
 
     # So' agora o resultado sai para um caminho rastreado: durante o sweep a

@@ -144,8 +144,14 @@ def main():
     print("=" * 96)
     print(f"  (i)   AGENT_STATE_TIMEOUT efetivo nas linhas: {fd_a}  n={len(a)}")
     print(f"  (i-b) AGENT_STATE_TIMEOUT efetivo nas linhas: {fd_b}  n={len(b)}")
-    print(f"  git_dirty  (i): {sorted(set(a.git_dirty.astype(str)))}   "
-          f"(i-b): {sorted(set(b.git_dirty.astype(str)))}")
+    def flags(col):
+        # NaN aqui NAO e' cosmetico: e' linha SEM MANIFESTO, ou seja sem
+        # proveniencia nenhuma (regra 5 da campanha violada). Tem de aparecer
+        # nomeado, nao virar 'nan' no meio de uma lista nem derrubar o sorted()
+        # com mistura de str e float -- que foi o que aconteceu na 1a execucao.
+        return sorted({"SEM MANIFESTO" if pd.isna(v) else str(v) for v in col})
+
+    print(f"  git_dirty  (i): {flags(a.git_dirty)}   (i-b): {flags(b.git_dirty)}")
     if retro_a:
         print("  colunas de injecao da fase (i) RECALCULADAS do events.csv preservado")
 

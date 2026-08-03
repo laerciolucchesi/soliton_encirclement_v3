@@ -190,17 +190,84 @@ post-event, the gap continuing to open because the ring cannot close it.
 0.0030 (26.1 m). A ~19 % tighter steady state at 4× the range: small, consistent across seeds,
 and a steady-state effect nobody asked the column to measure.
 
+## 4b. Phase (i-b): it is the range, not the failure detector
+
+Phase (i) pinned `AGENT_STATE_TIMEOUT` at 5·dt = 0.25 s, copied from
+`run_breach_window` — which uses that value *because its channel is ideal*. Here the channel is
+degraded by construction, and to a failure detector an out-of-range neighbour is
+indistinguishable from a dead one, so the two short points had to be re-run at the campaign's
+FD-fix value of 20·dt = 1.0 s. 32 cells, same runner, same three assertions, all rows
+`dirty=False`.
+
+```powershell
+$env:CRS_TAG="ib"; $env:CRS_RANGES="6.3,8.4"; $env:CRS_FD_TIMEOUT="1.0"
+python experiments/scaling_law/run_comm_range_sweep.py
+python experiments/scaling_law/analyze_comm_range_ib.py    # (i) vs (i-b) side by side
+```
+
+**Pre-registered before the grid ran**, in `analyze_comm_range_ib.py`'s docstring:
+*P1* — the B2 inversion at 8.4 m persists with the long timeout, because the successor's
+abstention is geometry and not detection. *P2* — the closing cliff may move left (6.3 m starts
+closing); if it does not, it is pure range.
+
+| | | (i) 0.25 s | (i-b) 1.0 s |
+|---|---|---|---|
+| 6.3 m | both methods | inf (16/16) | **inf (16/16)** |
+| 8.4 m | baseline `t_close_125` | 3.27 [3.25, 3.30] | 4.00 [4.00, 4.05] |
+| 8.4 m | B2 `t_close_125` | 6.45 [6.40, 6.45] | 7.20 [7.15, 7.21] |
+| 8.4 m | baseline `t_close_110` | 8.00 [7.94, 8.05] | 8.70 [8.70, 8.71] |
+| 8.4 m | B2 `t_close_110` | 16.58 [16.55, 16.61] | 17.30 [17.29, 17.35] |
+| 8.4 m | B2 advantage | 0.51× | **0.56×** |
+
+**P1 — confirmed, and more strongly than the prediction asked for.** The inversion persists
+(0.56×), but the decisive part is that the *event structure is identical*: `landed SAIDA = 0`,
+`landed ENTRADA = 1`, `seq_max = 2`, `hop_sum = 23`, coverage 22/23, successor not completed —
+**in all 8 seeds, in both phases**. Quadrupling the detector's tolerance changes nothing about
+which events fire. The spurious ENTRADA is geometry: the successor really does enter the
+originator's neighbour set, because the ring physically contracts, and no timeout can make a node
+that is present look absent. It is a defect in the trigger's semantics, not in its tuning.
+
+**P2 — confirmed in the "pure range" direction.** 0/16 cells close at 6.3 m in both phases. The
+closing cliff at c ∈ (1.21, 1.61] is not a detection artefact.
+
+### The unpredicted result: the FD-fix has a cost, and it is exactly the timeout
+
+Both methods got *slower* with the longer timeout, by the same amount:
+
+```
+baseline   3.27 → 4.00 s   (+0.73)
+B2         6.45 → 7.20 s   (+0.75)
+timeout increase           +0.75
+```
+
+The added closing time equals the added timeout, for a method that runs no overlay at all. So the
+detector timeout enters `t_close` **additively, as pure detection latency**, independent of the
+overlay. At 6.3 m the same cost shows up in the peak: baseline median 2.022 → 2.133, and per seed
+it is 6 worse, 2 tied, 0 better.
+
+This is a trade-off the loss campaign could not have measured. There, range was infinite, so the
+only cause of silence was packet loss and a longer timeout was pure robustness. With a finite
+range there is a **second population of silent neighbours** — the permanently out-of-range ones —
+and for those a longer timeout is pure delay: the agent holds formation against a neighbour that
+is not there. `AGENT_STATE_TIMEOUT` is therefore not a value to be maximised for robustness; it
+arbitrates between two causes of silence, and only one of them had been measured.
+
+Caveat on the storm: at 6.3 m the fast-layer topology churn does **not** drop with the longer
+timeout (median `topo_injections` 572 → 665). What drops is how many dual_pulse events *land*
+(max landed ENTRADA 66 → 14, `seq_max` 42 → 25). So the long timeout suppresses the *consequences*
+of the flapping, not the flapping itself.
+
 ## 5. Caveats
 
-**The shortest point is contaminated by the failure detector.** `AGENT_STATE_TIMEOUT` was pinned
-at 5·dt, copied from `run_breach_window` — which uses it *because its channel is ideal*. To a
-failure detector, an out-of-range neighbour is indistinguishable from a dead one. At c = 1.21
-the links flap around the range boundary, each flap injects a fresh SAIDA/ENTRADA, and coverage
-comes back **above 1.0** (several events, not one) with `G_max` peaks up to 8.2. That is the
-same false-storm pathology this campaign already documented under packet loss, entered through a
-different door. **The c = 1.21 row must not be read as "the mechanism fails here"** until phase
-(i-b) re-runs the two short points at the campaign's FD-fix value of 20·dt. If the closing cliff
-moves left, the cause was the detector; if it stays, it is the range.
+**The shortest point is partly a detector artefact — resolved, see §4b.** At c = 1.21 the links
+flap around the range boundary, each flap injects a fresh SAIDA/ENTRADA, and coverage comes back
+**above 1.0** (several events, not one) with `G_max` peaks up to 8.2 — the same false-storm
+pathology this campaign documented under packet loss, entered through a different door. Phase
+(i-b) re-ran both short points at 20·dt and settled it: the closing cliff does **not** move
+(0/16 cells close either way), so the c = 1.21 failure is range, not detection. What the long
+timeout does change is how many spurious events *land*; the storm's magnitude at c = 1.21 is
+detector-dependent even though the failure to close is not, so **peak values at c = 1.21 should
+be quoted with the timeout stated**.
 
 **The seeds are near-replicates, so the IQR is narrow by construction.** The scenario is
 deterministic — equidistant init, ideal channel, static target, no stochastic churn. The seed
