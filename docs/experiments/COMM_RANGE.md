@@ -12,10 +12,12 @@ stops working.
 quantities. Closing the gap at all needs about **1 hop** and the cliff is *identical* for both
 methods (so it is a property of the ring and the controller, not of the overlay). The overlay's
 **advantage** needs **2 hops** — `range >= 2·R·sin(2π/N)` — and below that line B2 is not merely
-degraded but **actively worse than doing nothing** (2× the baseline's closing time), because the
-one node that fails to complete is the one flanking the largest gap. Above the line the
-advantage appears at full strength and then **saturates**: from c = 2 to c = 5 the closing time
-does not move.
+degraded but **actively worse than doing nothing** (2× the baseline's closing time). The reason
+is not a weaker correction but the **wrong** one: the departure pulse dies unheard, the ring then
+contracts, and the reappearing neighbour is locally indistinguishable from an *arrival*, so the
+swarm executes a sign-inverted redistribution for a node that never joined (§2). Above the line
+the advantage appears at full strength and then **saturates**: from c = 2 to c = 5 the closing
+time does not move.
 
 ```powershell
 python experiments/scaling_law/run_comm_range_sweep.py
@@ -98,36 +100,66 @@ confirms the collapse rather than a slow close: 17.7 (baseline) and 21.1 (B2) at
 **(2) The advantage — the cliff is the 2-hop chord, 10.353 m at N = 24.** 10.4 m is the first
 grid point above it, and it is exactly where coverage completes and the sign flips.
 
-## 2. Why the 2-hop chord, mechanically
+## 2. Why the 2-hop chord, mechanically: the ring answers the wrong question
 
-Coverage at 8.4 m is 0.96 = 22/23, and `hop_sum = h_CCW + h_CW = 23` — the **full** ring
-traversal — for every node that did complete. So this is *not* pulse truncation: the pulses
-circle the ring perfectly well. Reading `events.csv` node by node, the missing node is the same
-one in every seed: the **victim's immediate successor**.
+Coverage at 8.4 m is 0.96 = 22/23 with `hop_sum = 23` — the **full** ring traversal — so this is
+not pulse truncation; the pulses circle the ring perfectly well. But reading the `event_id`s
+rather than just counting completions shows that the 22/23 belongs to a **different event than
+the death**, and the whole reading changes.
 
-The chain is forced by the protocol's own geometry:
+`event_id` is `"originator_seq"`, so the sequence number is an injection counter per originator.
+Retrofitted from every phase (i) cell:
 
-1. The canonical originator is the victim's **predecessor**.
-2. It injects two counter-propagating pulses; the one aimed at the victim is blocked
-   immediately by the corpse.
-3. So the victim's **successor** can only ever receive that direction **directly from the
-   originator**, across the merged gap — which is precisely the **2-hop chord**.
-4. A receiver applies its shift only after seeing **both** directions. Below the 2-hop chord the
-   successor therefore never completes.
+| range | landed events | kind | `seq` of the landed event | coverage |
+|---:|---:|---|---:|---:|
+| 6.3 m | 0 (5 of 8 seeds) / 13 | mixed | up to **19** | 0.00–0.30 |
+| 8.4 m | 1 | **ENTRADA** | **2** | 0.96 |
+| 10.4 m | 1 | SAIDA | **1** | 1.00 |
+| 26.1 m | 1 | SAIDA | 1 | 1.00 |
 
-Verified by direct inspection (seed 0, victim 14, originator 13, successor 15):
+Identical in all 8 seeds. At 10.4 m and above the **first** injection lands and it is a SAIDA —
+a departure, which is what actually happened. At 8.4 m the landed event is the originator's
+**second** injection, and it is an **ENTRADA** — an arrival. The first one left no trace at all.
 
-| range | successor completed? | covered |
-|---:|---|---:|
-| 6.3 m | no | 0/23 |
-| 8.4 m | **no** | 22/23 |
-| 10.4 m | **yes** | 23/23 |
-| 15.7 m | yes | 23/23 |
+The chain:
 
-And the successor is not an arbitrary node: it is one of the two flanking the **largest gap**,
-the node whose displacement matters most. It stays put while the other 21 execute their shifts,
-so the ring redistributes *around* a stationary node adjacent to the hole. That is why 22/23 is
-worse than 0/23-with-no-overlay: **partial redistribution is worse than none**.
+1. The victim dies. Its **predecessor** — the canonical originator — sees its successor go
+   stale and injects a **SAIDA** (event #1).
+2. The SAIDA's two counter-propagating pulses: the one aimed across the hole cannot reach the
+   victim's successor, because that distance is the **2-hop chord** (10.353 m > 8.4 m). A
+   receiver applies its shift only after seeing **both** directions, so with one direction dead
+   at birth **nobody completes**. Event #1 vanishes silently — the protocol logs completions,
+   not injections, which is why it took the `seq` counter to see it at all.
+3. The ring contracts under the controller. The successor drifts into the originator's range.
+4. Locally, that is a node *appearing* where there was none: `_classify_succ_event` sees
+   `succ_changed` with the previous successor still fresh and classifies it **ENTRADA**
+   (event #2), which then lands with 22/23 coverage.
+5. An ENTRADA shift is **sign-inverted** relative to a SAIDA. So 22 of 23 survivors redistribute
+   as if a node had **joined**, widening a gap that a death had already widened.
+
+So B2 at 8.4 m is not performing a degraded death-redistribution. It is performing a complete,
+**wrongly-signed arrival-redistribution**, which is why it is 2× *worse* than running no overlay
+at all rather than merely weaker.
+
+> **The general statement.** Under a finite radio range, *"a node came into range"* and *"a node
+> joined the ring"* are locally indistinguishable. The neighbour-only premise — the protocol's
+> main architectural claim — is exactly what makes the ambiguity unresolvable: the only evidence
+> a node has is its own neighbour set, and both events look identical in it. The 2-hop chord is
+> the range at which the SAIDA reaches the far side of the hole before the geometry can
+> re-present itself as an arrival.
+
+Per-node verification (seed 0, victim 14, originator 13, successor 15):
+
+| range | successor completed? | covered | event that landed |
+|---:|---|---:|---|
+| 6.3 m | no | 0/23 | none |
+| 8.4 m | **no** | 22/23 | ENTRADA (seq 2) |
+| 10.4 m | **yes** | 23/23 | SAIDA (seq 1) |
+| 15.7 m | yes | 23/23 | SAIDA (seq 1) |
+
+The successor abstaining is real, but it is a *symptom*: it abstains from the spurious ENTRADA,
+having never been offered the SAIDA. Phase (i-b) tests whether step 4 is geometry or merely a
+short failure-detector timeout — see §5.
 
 ## 3. Saturation — and the design rule
 

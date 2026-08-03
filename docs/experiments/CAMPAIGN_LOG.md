@@ -1008,13 +1008,20 @@ supplies a range per `(sender_role, receiver_role)` pair instead (commit `3de1f9
   **saturates**: 2.30–2.32 s from c = 2 to c = 5.
 
 **Knowledge produced — why, mechanically.** Coverage at 8.4 m is 22/23 with `hop_sum = 23`, so
-the pulses DO circle the ring; it is not truncation. The missing node is the victim's SUCCESSOR,
-in every seed. The originator is the victim's PREDECESSOR and one of its two counter-propagating
-pulses dies on the corpse, so the successor can only see that direction directly from the
-originator — across exactly the 2-hop chord — and a receiver needs BOTH directions to apply its
-shift. The successor is also the node flanking the LARGEST gap: it stays put while the other 21
-move. **Partial redistribution is worse than none.** This is a structural property of the
-single-originator coordination (v1), not a tuning issue.
+the pulses DO circle the ring; it is not truncation. But the `event_id`s show the 22/23 belongs
+to a DIFFERENT EVENT than the death. `event_id` is `originator_seq`, so the seq is an injection
+counter: at ≥10.4 m the landed event is seq **1** and type **SAIDA**; at 8.4 m it is seq **2**
+and type **ENTRADA**, in all 8 seeds. The chain: the predecessor injects the SAIDA, its
+across-the-hole direction cannot reach the victim's successor (that distance IS the 2-hop
+chord), a receiver needs BOTH directions, so NOBODY completes it and the event vanishes without
+a trace — the protocol logs completions, never injections. The ring then contracts, the
+successor drifts into range, and `_classify_succ_event` reads that as a node APPEARING: a
+spurious ENTRADA fires and 22/23 survivors apply a **sign-inverted** shift for a node that never
+joined. **B2 below the chord is not weaker, it is wrong.** General form, and the part that
+matters beyond this experiment: with a finite radio range, *"came into range"* and *"joined the
+ring"* are locally indistinguishable, and the neighbour-only premise — the protocol's main
+architectural claim — is precisely what makes the ambiguity unresolvable locally. Structural
+property of single-originator coordination (v1), not a tuning issue.
 
 **Design rule produced.** Size the ring radio at `2·R·sin(2π/N)` and stop — half the uplink range
 at N=24, and more transmit power buys nothing.

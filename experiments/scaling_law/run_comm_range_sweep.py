@@ -82,6 +82,13 @@ BUDGET = float(os.environ.get("CRS_BUDGET", "90"))
 DT = float(os.environ.get("CONTROL_PERIOD", "0.05"))
 T_FAIL = float(os.environ.get("CRS_T_FAIL", "5.0"))
 DRY_RUN = os.environ.get("CRS_DRY_RUN", "").strip().lower() in ("1", "true", "yes", "y")
+PROGRESS_EVERY = max(1, int(os.environ.get("CRS_PROGRESS_EVERY", "10")))
+# Timeout do detector de falhas. Default 5*dt = o valor do run_breach_window,
+# que o usa PORQUE o canal dele e' ideal. Nesta fase o canal NAO e' ideal por
+# construcao, e para o detector um vizinho fora de alcance e' indistinguivel de
+# um vizinho morto -- por isso a fase (i-b) varre 20*dt (o FD-fix da campanha de
+# comunicacao) nos mesmos pontos curtos, para separar detector de alcance.
+FD_TIMEOUT = float(os.environ.get("CRS_FD_TIMEOUT", str(5.0 * DT)))
 
 # Mesmos limiares do run_breach_window: 1.25 = primario, 1.10 = estrito.
 THR_PRIMARY = 1.25
@@ -248,7 +255,9 @@ def dual_pulse_coverage(run_dir, survivors):
     """
     p = os.path.join(run_dir, "events.csv")
     out = {"dp_completed": 0, "dp_self_shift": 0, "dp_coverage": float("nan"),
-           "dp_hop_sum_ok_frac": float("nan"), "dp_hop_sum_median": float("nan")}
+           "dp_hop_sum_ok_frac": float("nan"), "dp_hop_sum_median": float("nan"),
+           "topo_injections": 0, "dp_landed_events": 0, "dp_landed_saida": 0,
+           "dp_landed_entrada": 0, "dp_seq_max": 0, "dp_originators": 0}
     if not os.path.exists(p):
         return out
     try:
@@ -258,8 +267,9 @@ def dual_pulse_coverage(run_dir, survivors):
     if "event_type" not in ev.columns:
         return out
 
-    done = ev[ev["event_type"].astype(str).str.startswith("dual_pulse_event_completed")]
-    self_shift = ev[ev["event_type"].astype(str).str.startswith("dual_pulse_self_shift")]
+    types = ev["event_type"].astype(str)
+    done = ev[types.str.startswith("dual_pulse_event_completed")]
+    self_shift = ev[types.str.startswith("dual_pulse_self_shift")]
     out["dp_completed"] = int(done["node_id"].nunique()) if len(done) else 0
     out["dp_self_shift"] = int(self_shift["node_id"].nunique()) if len(self_shift) else 0
     if survivors > 0:
@@ -271,6 +281,36 @@ def dual_pulse_coverage(run_dir, survivors):
         if len(hops):
             out["dp_hop_sum_median"] = float(hops.median())
             out["dp_hop_sum_ok_frac"] = float((hops == (N - 1)).mean())
+
+    # --- contagem de injecoes -------------------------------------------------
+    # LIMITE DA MEDIDA: o protocolo NAO registra a injecao do dual_pulse, so' as
+    # conclusoes. Uma injecao cujos pulsos nunca completam para ninguem nao deixa
+    # NENHUM rastro em events.csv -- e esse e' justamente o caso interessante
+    # abaixo do acorde de 2 saltos. Entao medimos por tres vias, nenhuma delas
+    # uma contagem direta, e a discrepancia entre elas E' o sinal:
+    #   topo_injections  numero de linhas 'pulse_injected' -- e' o fast_layer,
+    #                    nao o dual_pulse (gatilho pred OU succ, com limiar de
+    #                    amplitude), logo um PROXY de agitacao topologica.
+    #   dp_landed_*      eventos que ATERRISSARAM (>=1 conclusao), por tipo.
+    #   dp_seq_max       maior seq entre os event_id ("originador_seq") que
+    #                    aterrissaram. seq > 1 prova que houve injecoes ANTERIORES
+    #                    do mesmo originador que morreram sem completar ninguem.
+    out["topo_injections"] = int((types == "pulse_injected").sum())
+    landed = pd.concat([done, self_shift]) if len(done) or len(self_shift) else done
+    if len(landed) and "event_id" in landed.columns:
+        ids = landed["event_id"].dropna().astype(str)
+        out["dp_landed_events"] = int(ids.nunique())
+        kinds = landed.loc[ids.index, "event_type"].astype(str)
+        out["dp_landed_saida"] = int(ids[kinds.str.endswith("saida")].nunique())
+        out["dp_landed_entrada"] = int(ids[kinds.str.endswith("entrada")].nunique())
+        seqs, origs = [], set()
+        for eid in ids.unique():
+            parts = eid.split("_")
+            if len(parts) == 2 and parts[1].isdigit():
+                seqs.append(int(parts[1]))
+                origs.add(parts[0])
+        out["dp_seq_max"] = max(seqs) if seqs else 0
+        out["dp_originators"] = len(origs)
     return out
 
 
@@ -347,7 +387,7 @@ def run_cell(method, rng_aa, seed):
         "ENCIRCLEMENT_RADIUS": f"{R_ENC:g}",
         "SIM_DURATION": f"{T_FAIL + BUDGET:g}",
         "CONTROL_PERIOD": f"{DT:g}",
-        "AGENT_STATE_TIMEOUT": f"{5.0 * DT:g}",
+        "AGENT_STATE_TIMEOUT": f"{FD_TIMEOUT:g}",
         "K_E_TAU": f"{250.0 / N:.6f}",
         "EXPERIMENT_SEED": str(seed),
         "EXPERIMENT_REPRODUCIBLE": "True",
@@ -397,7 +437,7 @@ def run_cell(method, rng_aa, seed):
     m.update({"method": tag, "N": N, "radius": R_ENC, "range_aa": rng_aa, "range_at": UPLINK,
               "c_hops": c_units(rng_aa), "c_hops_post": c_units_post(rng_aa),
               "tau_xy": TAU, "seed": seed, "victim": victim,
-              "agent_state_timeout": 5.0 * DT, "dt": DT})
+              "agent_state_timeout": FD_TIMEOUT, "dt": DT})
     m.update(run_provenance(run_dir))
     tc = m["t_close_125"]
     cov = m.get("dp_coverage")
@@ -427,6 +467,7 @@ def print_grid():
     print(f"Fase 8a (i): alcance do anel, N={N}, R={R_ENC:g} m, uplink={UPLINK:g} m")
     print(f"  acorde 1 salto = {chord(1):.3f} m | 2 saltos = {chord(2):.3f} m | 3 saltos = {chord(3):.3f} m")
     print(f"  metodos={METHODS}  sementes={SEEDS}  dt={DT:g}  tau_a={TAU:g}  budget={BUDGET:g}s")
+    print(f"  AGENT_STATE_TIMEOUT = {FD_TIMEOUT:g}s ({FD_TIMEOUT / DT:.0f} ticks)"          f"{'  <-- FD-fix da campanha de comunicacao' if FD_TIMEOUT >= 20 * DT else ''}")
     print(f"  celulas = {len(RANGES)} x {len(SEEDS)} x {len(METHODS)} = "
           f"{len(RANGES) * len(SEEDS) * len(METHODS)}")
     print(f"\n  {'range_aa':>9} {'c=r/acorde1':>12} {'saltos alcancados':>18}")
@@ -566,7 +607,7 @@ def main():
                 if r:
                     store[_key(r)] = r
                     pd.DataFrame(list(store.values())).to_csv(WORK_CSV, index=False)
-                if done % 10 == 0:
+                if done % PROGRESS_EVERY == 0:
                     print(f"[progress] {done}/{total} celulas | ultimo: aa={rng_aa:g} "
                           f"(c_pre={c_units(rng_aa):.2f})", flush=True)
 
