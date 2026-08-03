@@ -401,7 +401,9 @@ def run_cell(method, rng_aa, seed):
     m.update(run_provenance(run_dir))
     tc = m["t_close_125"]
     cov = m.get("dp_coverage")
-    cov_txt = "" if not np.isfinite(cov or float("nan")) else f"  cob={cov:.2f}"
+    # NAO usar `cov or nan`: cobertura 0.0 e' falsy, e era justamente o caso
+    # que mais precisa aparecer na linha ao vivo (pulso nao circulou).
+    cov_txt = "" if cov is None or not np.isfinite(cov) else f"  cob={cov:.2f}"
     print(f" pico={m['gmax_peak']:.3f}  egap_pre={m['egap_pre']:.4f}"
           f"  t_close={'inf' if not np.isfinite(tc) else f'{tc:.2f}s'}"
           f"  alive_min={checks['assert_alive_min']:.0f}{cov_txt}")
@@ -522,7 +524,7 @@ def report(df):
                   f"c_pos {c_units_post(max(bad_r)):.2f}) -- penhasco ACIMA da grade")
 
     # Vigilancia do budget: se muita celula fecha perto do teto, o budget esta
-    # mordendo o resultado e a fase (ii) precisa subir o teto, nao refinar a grade.
+    # truncando o resultado e a fase (ii) precisa subir o teto, nao refinar a grade.
     tc = df["t_close_125"].astype(float)
     finite = tc[np.isfinite(tc)]
     near = int((finite > 0.65 * BUDGET).sum())
@@ -530,7 +532,7 @@ def report(df):
     print(f"\n=== vigilancia do budget ({BUDGET:g}s) ===")
     print(f"  t_close infinito: {n_inf}/{len(tc)} celulas")
     print(f"  t_close entre {0.65 * BUDGET:.0f}s e {BUDGET:g}s: {near} celulas"
-          f"{'  <-- budget mordendo, subir para ~150s na fase (ii)' if near else ''}")
+          f"{'  <-- budget truncando o resultado, subir para ~150s na fase (ii)' if near else ''}")
     if len(finite):
         print(f"  maior t_close finito: {float(finite.max()):.2f}s")
 

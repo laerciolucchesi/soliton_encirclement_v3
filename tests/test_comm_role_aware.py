@@ -225,10 +225,14 @@ def test_ring_partitions_when_range_is_below_the_two_hop_chord(ring):
     """Static reachability at the moment of a death: 2-hop links do drop.
 
     At 20 m the two survivors flanking a dead drone are 23.51 m apart and can no
-    longer hear each other -- while the target still hears both. Note this is a
-    geometric fact about one instant, NOT a prediction of failure: measured runs
-    recover fully at 20 m, because the controller closes the gap and the pulses
-    travel around the ring rather than across it.
+    longer hear each other -- while the target still hears both.
+
+    This link is why the 2-hop chord matters, though not for the reason first
+    guessed. The gap still CLOSES below it (the controller pulls the survivors
+    together and the pulses circle the ring), but the victim's successor never
+    completes the dual_pulse event: one of the two counter-propagating pulses is
+    blocked by the corpse, so the successor can only see that direction directly
+    from the originator -- across exactly this link. See config_param, section 2.
     """
     nodes, inboxes, build = ring
     handler = build(agent_target_range_matrix(agent_agent=20.0, agent_target=200.0))

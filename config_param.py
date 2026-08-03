@@ -109,18 +109,43 @@ if not (0.0 <= COMMUNICATION_FAILURE_RATE <= 1.0):
 #   anything involving the adversary: COMMUNICATION_TRANSMISSION_RANGE.
 #
 # Sizing (R = ENCIRCLEMENT_RADIUS): the k-hop chord of the ring is
-# 2*R*sin(k*pi/N) -- 12.36 m at 1 hop and 23.51 m at 2 hops for N=10, R=20.
+# 2*R*sin(k*pi/N). There are TWO thresholds, for two different quantities, and
+# earlier drafts of this note collapsed them into one and got it wrong twice.
+# Both are measured at N=24, R=20, single deterministic death, 8 paired seeds,
+# baseline and B2 (phase 8a (i), comm_range_results.csv).
 #
-# The binding constraint is the 1-HOP chord, measured, not the 2-hop one. The
-# intuition that a ring range below the 2-hop chord breaks the redistribution
-# (right after a death the two survivors flanking the victim are 2 hops apart)
-# does NOT hold: they are only briefly out of range, the controller closes the
-# gap, and the pulses travel around the ring both ways without crossing it.
-# Measured at N=10, R=20, single deterministic death, dual_pulse/B2 -- full
-# recovery to G_max = 1.0000 at 20/22/25/30 m, collapse at 15 m (G_max 1.77)
-# and 13 m (1.99). So the cliff is between 1.1x and 1.6x the post-death 1-hop
-# chord (13.68 m at N=9), i.e. between 15 and 20 m for this configuration.
-# Re-measure before trusting these numbers at another N, R or churn density.
+#   (1) CLOSING AT ALL needs ~1 hop. Below it the gap never closes within the
+#       budget for EITHER method, so it is a property of the ring and the
+#       controller, not of the overlay. Cliff measured in c = range/(1-hop
+#       chord): c in (1.21, 1.61], identical for baseline and B2.
+#
+#   (2) THE B2 ADVANTAGE needs 2 hops, i.e. range >= 2*R*sin(2*pi/N).
+#       Mechanism, measured node by node: the originator is the victim's
+#       PREDECESSOR, and one of its two counter-propagating pulses is blocked
+#       immediately by the corpse. So the victim's SUCCESSOR can only ever see
+#       that direction directly from the originator, across the merged gap --
+#       which is exactly the 2-hop chord. A receiver applies its shift only
+#       after seeing BOTH directions, so below the 2-hop chord the successor
+#       never completes: coverage 22/23, hop_sum still the full 23 for everyone
+#       else. And the successor is the node flanking the LARGEST gap. It stays
+#       put while the other 21 move, and the partial redistribution is worse
+#       than none: at 8.4 m (c=1.61) B2 closes in 6.45 s against the baseline's
+#       3.27 s, a 2x PENALTY. At 10.4 m -- the first point above the 10.353 m
+#       2-hop chord -- coverage is 23/23 and B2 wins, 2.30 s against 3.20 s.
+#       On the strict 1.10 threshold the inversion is sharper still: 16.58 s
+#       against 8.00 s below, 3.42 s against 7.65 s above.
+#
+# The advantage then SATURATES: B2 sits at 2.30-2.32 s from c=1.99 to c=5.00,
+# so range beyond the 2-hop chord buys nothing. Design rule: size the ring
+# radio at 2*R*sin(2*pi/N) and stop.
+#
+# Caveat on the short end: AGENT_STATE_TIMEOUT was pinned at 5*dt for that
+# campaign, and to a failure detector an out-of-range neighbour is
+# indistinguishable from a dead one. At c=1.21 the links flap around the range
+# boundary and each flap injects a fresh SAIDA/ENTRADA -- coverage came back
+# ABOVE 1.0 (several events, not one) with G_max peaks up to 8.2. That regime
+# is contaminated by the detector, not a clean reading of the mechanism; the
+# campaign's FD-fix value under degraded comms is 20*dt.
 #
 # Note that a FIXED metric range means the hop neighbourhood GROWS with N at
 # fixed R (30 m is 2 hops at N=10 but 13 hops at N=50 and 27 at N=100) -- that
