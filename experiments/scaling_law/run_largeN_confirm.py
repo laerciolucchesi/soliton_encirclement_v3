@@ -23,6 +23,9 @@ import subprocess
 import numpy as np
 import pandas as pd
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from metrics_util import effort_metrics  # noqa: E402
+
 _THIS = os.path.abspath(__file__)
 EXP_DIR = os.path.dirname(_THIS)
 REPO_ROOT = os.path.dirname(os.path.dirname(EXP_DIR))
@@ -116,6 +119,18 @@ def run(method, n, seed, budget, is_b2):
         print(f"     FAILED (rc={proc.returncode})\n{(proc.stderr or '')[-800:]}")
         return None
     m = metrics_from_csv(tgt)
+
+    # Esforco/saturacao/fairness (M5/M6/M2) ANTES de apagar: o agent_telemetry.csv
+    # e' a unica fonte deles. Politica da campanha (ver run_comm_range_sweep):
+    # EXTRAIR e apagar, sem flag de retencao -- o arquivo chega a GB por celula
+    # aqui, e' deterministico e regeneravel no commit que o manifesto grava, e
+    # guardar essa massa para evitar uma re-execucao eventual e' troca ruim.
+    _agent_csv = os.path.join(run_dir, "agent_telemetry.csv")
+    m.update(effort_metrics(_agent_csv, t0=T0, vmax=10.0))
+    try:
+        os.remove(_agent_csv)
+    except OSError:
+        pass
     m.update({"method": "B2" if is_b2 else "baseline", "N": n, "seed": seed})
     print(f"     tau_fit={m.get('tau_fit'):.2f}  R2={m.get('tau_fit_r2'):.2f}  "
           f"egap_final={m.get('egap_final'):.4f}  late_std={m.get('egap_late_std'):.4f}")
