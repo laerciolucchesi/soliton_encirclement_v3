@@ -106,8 +106,20 @@ def chord(k_hops, n=None, radius=None):
 
 
 def c_units(transmission_range):
-    """Alcance em unidades do acorde de 1 salto -- a escala em que o penhasco vive."""
+    """Alcance em unidades do acorde de 1 salto PRE-morte (N agentes)."""
     return float(transmission_range) / chord(1)
+
+
+def c_units_post(transmission_range):
+    """Idem, mas no acorde POS-morte (N-1 agentes) -- a outra normalizacao em uso.
+
+    As duas convivem nos documentos: o comentario do config_param normaliza pelo
+    acorde pos-morte (o anel que efetivamente tem de se manter conectado depois
+    do evento), o plano desta fase normaliza pelo pre-morte. Diferem 4,3% em
+    N=24 (5,221 vs 5,448 m). Toda saida imprime as DUAS, para nao haver uma
+    quarta rodada de reconciliacao por definicao divergente entre documentos.
+    """
+    return float(transmission_range) / chord(1, n=N - 1)
 
 
 def victim_node_id(n, seed=0):
@@ -220,6 +232,48 @@ def failure_time(run_dir, fallback):
     return float(f["timestamp"].min()) if len(f) else fallback
 
 
+def dual_pulse_coverage(run_dir, survivors):
+    """Quantos sobreviventes REALMENTE completaram o evento, e o hop-sum bateu?
+
+    Mede diretamente o "os pulsos contornam o anel" que o t_close so' infere.
+    Um receptor so' aplica seu delta depois de ver AS DUAS direcoes, e ai grava
+    dual_pulse_event_completed_*; o originador nao recebe o proprio pulso pelo
+    relay e grava dual_pulse_self_shift_* quando ele volta. Cobertura total =
+    os dois somados, sobre os N-1 sobreviventes.
+
+    hop_sum = h_CCW + h_CW deve dar N_old - 1 = N - 1 (23 em N=24): e' a
+    travessia completa do anel. Um hop_sum menor significa pulso truncado
+    (TTL, particao) -- delta calculado sobre um anel que o no' acha menor do
+    que e'.
+    """
+    p = os.path.join(run_dir, "events.csv")
+    out = {"dp_completed": 0, "dp_self_shift": 0, "dp_coverage": float("nan"),
+           "dp_hop_sum_ok_frac": float("nan"), "dp_hop_sum_median": float("nan")}
+    if not os.path.exists(p):
+        return out
+    try:
+        ev = pd.read_csv(p)
+    except Exception:
+        return out
+    if "event_type" not in ev.columns:
+        return out
+
+    done = ev[ev["event_type"].astype(str).str.startswith("dual_pulse_event_completed")]
+    self_shift = ev[ev["event_type"].astype(str).str.startswith("dual_pulse_self_shift")]
+    out["dp_completed"] = int(done["node_id"].nunique()) if len(done) else 0
+    out["dp_self_shift"] = int(self_shift["node_id"].nunique()) if len(self_shift) else 0
+    if survivors > 0:
+        out["dp_coverage"] = (out["dp_completed"] + out["dp_self_shift"]) / float(survivors)
+
+    if len(done) and {"h_CCW", "h_CW"} <= set(done.columns):
+        hops = pd.to_numeric(done["h_CCW"], errors="coerce") + pd.to_numeric(done["h_CW"], errors="coerce")
+        hops = hops[np.isfinite(hops)]
+        if len(hops):
+            out["dp_hop_sum_median"] = float(hops.median())
+            out["dp_hop_sum_ok_frac"] = float((hops == (N - 1)).mean())
+    return out
+
+
 def metrics_from_run(run_dir):
     tgt = os.path.join(run_dir, "target_telemetry.csv")
     if not os.path.exists(tgt):
@@ -230,6 +284,18 @@ def metrics_from_run(run_dir):
     except ValueError:
         return {"error": "telemetria sem alive_count/gap_max_rad"}
     t_fail = failure_time(run_dir, T_FAIL)
+
+    # Estado PRE-evento (ultima amostra antes de t_fail). O pico so' pega
+    # degradacao grossa da formacao; egap_pre separa "a formacao se manteve ate
+    # o evento" de "ja estava derivando", que e' a leitura errada mais provavel
+    # de um pico alto em alcance curto.
+    pre = df[df["timestamp"] < t_fail]
+    pre_metrics = {"egap_pre": float("nan"), "gmax_pre": float("nan"), "alive_pre": float("nan")}
+    if len(pre):
+        last = pre.iloc[-1]
+        pre_metrics = {"egap_pre": float(last["E_gap"]), "gmax_pre": float(last["G_max"]),
+                       "alive_pre": float(last["alive_count"])}
+
     post = df[df["timestamp"] >= t_fail].reset_index(drop=True)
     if post.empty:
         return {}
@@ -241,8 +307,11 @@ def metrics_from_run(run_dir):
     excess = np.maximum(0.0, g - THR_PRIMARY)
     area = float(np.trapezoid(excess, t)) if t.size > 1 else 0.0
     i_pk = int(np.nanargmax(g))
+    survivors = int(round(float(alive[-1]))) if alive.size else (N - 1)
     return {
         "t_fail": t_fail,
+        **pre_metrics,
+        **dual_pulse_coverage(run_dir, survivors),
         "gmax_peak": float(g[i_pk]),
         "gap_peak_deg": float(np.degrees(rad[i_pk])),
         "alive_at_peak": float(alive[i_pk]),
@@ -326,12 +395,16 @@ def run_cell(method, rng_aa, seed):
         return None
     m.update(checks)
     m.update({"method": tag, "N": N, "radius": R_ENC, "range_aa": rng_aa, "range_at": UPLINK,
-              "c_hops": c_units(rng_aa), "tau_xy": TAU, "seed": seed, "victim": victim,
+              "c_hops": c_units(rng_aa), "c_hops_post": c_units_post(rng_aa),
+              "tau_xy": TAU, "seed": seed, "victim": victim,
               "agent_state_timeout": 5.0 * DT, "dt": DT})
     m.update(run_provenance(run_dir))
     tc = m["t_close_125"]
-    print(f" pico={m['gmax_peak']:.3f}  t_close={'inf' if not np.isfinite(tc) else f'{tc:.2f}s'}"
-          f"  alive_min={checks['assert_alive_min']:.0f}")
+    cov = m.get("dp_coverage")
+    cov_txt = "" if not np.isfinite(cov or float("nan")) else f"  cob={cov:.2f}"
+    print(f" pico={m['gmax_peak']:.3f}  egap_pre={m['egap_pre']:.4f}"
+          f"  t_close={'inf' if not np.isfinite(tc) else f'{tc:.2f}s'}"
+          f"  alive_min={checks['assert_alive_min']:.0f}{cov_txt}")
     return m
 
 
@@ -361,7 +434,52 @@ def print_grid():
     print()
 
 
+SEED_NOTE = """
+NOTA SOBRE AS SEMENTES -- leia antes do IQR.
+  O cenario e' deterministico por construcao: INIT_ANGLES_EQUIDISTANT=True,
+  INIT_RADIUS_RANGE=0, canal ideal (perda 0, atraso 0), alvo parado, sem churn
+  estocastico (FAILURE_MEAN_FAILURES_PER_MIN=0) e um unico obito determinista.
+  A semente faz DUAS coisas: escolhe a vitima -- posicoes rotacionalmente
+  quase equivalentes num anel uniforme -- e alimenta os RNGs de timer.
+  As 8 sementes sao portanto QUASE-REPLICAS, nao cenarios distintos. O IQR
+  abaixo mede ruido de replicacao (na campanha de leva unica o espalhamento
+  ficou em 0,4%), NAO variabilidade de cenario. Um IQR estreito aqui e'
+  esperado por construcao e nao autoriza ler o numero como "preciso para um
+  anel qualquer"; para isso seria preciso variar a configuracao inicial
+  (INIT_ANGLES_EQUIDISTANT=False / INIT_RADIUS_RANGE>0), o que esta fase NAO
+  faz.
+"""
+
+
 def report(df):
+    print(SEED_NOTE)
+
+    print("=== formacao PRE-evento (t=5-): egap_pre, mediana [IQR] ===")
+    print("  sentinela da previsao 1: se o pico variar com o alcance, a causa e'")
+    print("  a formacao ja estar derivando em t=5, e e' aqui que isso aparece.")
+    print(f"{'range':>7} {'c_pre':>6} {'c_pos':>6} | " + " | ".join(f"{m:^26}" for m in ("baseline", "B2")))
+    for rng in sorted(df["range_aa"].unique()):
+        cells = []
+        for meth in ("baseline", "B2"):
+            sub = df[(df.method == meth) & (df.range_aa == rng)]["egap_pre"]
+            med, q1, q3, n_ok, _ = iqr_row(sub)
+            cells.append(f"{'n.a.':^26}" if n_ok == 0 else f"{f'{med:.4f} [{q1:.4f},{q3:.4f}]':^26}")
+        print(f"{rng:>7g} {c_units(rng):>6.2f} {c_units_post(rng):>6.2f} | " + " | ".join(cells))
+
+    b2 = df[df.method == "B2"]
+    if len(b2):
+        print("\n=== B2: os pulsos contornaram o anel? (medicao direta, nao inferida) ===")
+        print(f"  cobertura = (receptores que completaram + originador) / {N - 1} sobreviventes")
+        print(f"  hop_sum = h_CCW + h_CW; travessia completa do anel => {N - 1}")
+        print(f"{'range':>7} {'c_pre':>6} | {'cobertura':>18} | {'hop_sum med':>11} | {'frac hop_sum=' + str(N - 1):>16}")
+        for rng in sorted(b2["range_aa"].unique()):
+            sub = b2[b2.range_aa == rng]
+            med_c, q1_c, q3_c, n_ok, _ = iqr_row(sub["dp_coverage"])
+            med_h, _, _, _, _ = iqr_row(sub["dp_hop_sum_median"])
+            med_f, _, _, _, _ = iqr_row(sub["dp_hop_sum_ok_frac"])
+            cov = "n.a." if n_ok == 0 else f"{med_c:.2f} [{q1_c:.2f},{q3_c:.2f}]"
+            print(f"{rng:>7g} {c_units(rng):>6.2f} | {cov:>18} | {med_h:>11.1f} | {med_f:>16.2f}")
+
     for metric, fmt in (("gmax_peak", "{:.3f}"), ("t_close_125", "{:.2f}"), ("t_close_110", "{:.2f}")):
         print(f"\n=== {metric}: mediana [IQR] por (range, metodo) ===")
         print(f"{'range':>7} {'c':>6} | " + " | ".join(f"{m:^26}" for m in ("baseline", "B2")))
@@ -379,23 +497,42 @@ def report(df):
                     cells.append(f"{txt:^26}")
             print(f"{rng:>7g} {c_units(rng):>6.2f} | " + " | ".join(cells))
 
-    print("\n=== penhasco (em unidades c = range / acorde de 1 salto) ===")
-    print(f"  acorde de 1 salto a N={N}, R={R_ENC:g}: {chord(1):.3f} m")
+    print("\n=== penhasco, NAS DUAS NORMALIZACOES ===")
+    print(f"  criterio fixado ex-ante: o maior c em que MENOS DA METADE das sementes fecha")
+    print(f"  (t_close_125 finito dentro do budget de {BUDGET:g}s).")
+    print(f"  acorde de 1 salto pre-morte  (N={N}):   {chord(1):.3f} m  -> c_pre")
+    print(f"  acorde de 1 salto pos-morte  (N={N - 1}):   {chord(1, n=N - 1):.3f} m  -> c_pos")
     for meth in ("baseline", "B2"):
-        ok_c, bad_c = [], []
+        ok_r, bad_r = [], []
         for rng in sorted(df["range_aa"].unique()):
             sub = df[(df.method == meth) & (df.range_aa == rng)]["t_close_125"].astype(float)
             if sub.empty:
                 continue
-            # "fechou" = mais da metade das sementes fecharam dentro do budget
-            (ok_c if float(np.mean(np.isfinite(sub))) > 0.5 else bad_c).append(c_units(rng))
-        if ok_c and bad_c:
-            print(f"  {meth:>8}: fecha a partir de c={min(ok_c):.2f}; falha ate c={max(bad_c):.2f} "
-                  f"-> penhasco em c ∈ ({max(bad_c):.2f}, {min(ok_c):.2f}]")
-        elif ok_c:
-            print(f"  {meth:>8}: fechou em todos os c varridos (>= {min(ok_c):.2f}) -- penhasco abaixo da grade")
-        elif bad_c:
-            print(f"  {meth:>8}: falhou em todos os c varridos (<= {max(bad_c):.2f}) -- penhasco acima da grade")
+            (ok_r if float(np.mean(np.isfinite(sub))) > 0.5 else bad_r).append(rng)
+        if ok_r and bad_r:
+            lo, hi = max(bad_r), min(ok_r)
+            print(f"  {meth:>8}: penhasco entre {lo:g} e {hi:g} m  ->  "
+                  f"c_pre ∈ ({c_units(lo):.2f}, {c_units(hi):.2f}]   "
+                  f"c_pos ∈ ({c_units_post(lo):.2f}, {c_units_post(hi):.2f}]")
+        elif ok_r:
+            print(f"  {meth:>8}: fechou em toda a grade (>= {min(ok_r):g} m, c_pre {c_units(min(ok_r)):.2f} / "
+                  f"c_pos {c_units_post(min(ok_r)):.2f}) -- penhasco ABAIXO da grade")
+        elif bad_r:
+            print(f"  {meth:>8}: falhou em toda a grade (<= {max(bad_r):g} m, c_pre {c_units(max(bad_r)):.2f} / "
+                  f"c_pos {c_units_post(max(bad_r)):.2f}) -- penhasco ACIMA da grade")
+
+    # Vigilancia do budget: se muita celula fecha perto do teto, o budget esta
+    # mordendo o resultado e a fase (ii) precisa subir o teto, nao refinar a grade.
+    tc = df["t_close_125"].astype(float)
+    finite = tc[np.isfinite(tc)]
+    near = int((finite > 0.65 * BUDGET).sum())
+    n_inf = int((~np.isfinite(tc)).sum())
+    print(f"\n=== vigilancia do budget ({BUDGET:g}s) ===")
+    print(f"  t_close infinito: {n_inf}/{len(tc)} celulas")
+    print(f"  t_close entre {0.65 * BUDGET:.0f}s e {BUDGET:g}s: {near} celulas"
+          f"{'  <-- budget mordendo, subir para ~150s na fase (ii)' if near else ''}")
+    if len(finite):
+        print(f"  maior t_close finito: {float(finite.max()):.2f}s")
 
 
 def main():
@@ -415,15 +552,21 @@ def main():
                 pass
     print(f"{len(store)} celulas ja no CSV (merge incremental)\n")
 
+    total = len(RANGES) * len(SEEDS) * len(METHODS)
+    done = 0
     for rng_aa in RANGES:
         for seed in SEEDS:
             for method in METHODS:
                 if (("B2" if method == "dual_pulse" else "baseline"), round(rng_aa, 6), seed) in store:
                     continue
                 r = run_cell(method, rng_aa, seed)
+                done += 1
                 if r:
                     store[_key(r)] = r
                     pd.DataFrame(list(store.values())).to_csv(WORK_CSV, index=False)
+                if done % 10 == 0:
+                    print(f"[progress] {done}/{total} celulas | ultimo: aa={rng_aa:g} "
+                          f"(c_pre={c_units(rng_aa):.2f})", flush=True)
 
     df = pd.DataFrame(list(store.values()))
     if df.empty:
