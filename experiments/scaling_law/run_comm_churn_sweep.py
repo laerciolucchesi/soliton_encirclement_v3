@@ -15,10 +15,16 @@ P3 -- O c** efetivo SOBE acima de 2*cos(pi/N) = 1.9829.
   limiar medido nas fases (i)/(i-b) para um anel UNIFORME. Sob churn os vaos
   chegam a ~2x o ideal, entao a distancia que o pulso de SAIDA precisa cruzar
   cresce e o limiar deve subir.
-  Discriminador: c = 2.0 fica 0.9% ACIMA de 1.9829. Se c** subir por pouco que
+  Discriminador: c = 2.0 fica 0.46% ACIMA de 1.9829. Se c** subir por pouco que
   seja, c = 2.0 vira de sucesso (fase i) para falha sob churn.
     c=2.0 falha  -> P3 confirmada
     c=2.0 aguenta -> P3 refutada, o limiar uniforme sobrevive ao churn
+  ERRATA 2026-08-03 (pos-grade, aritmetica apenas): a versao commitada deste
+  bloco dizia "0.9% ACIMA". O valor correto e' +0.46% (c = 10.4/5.2210 =
+  1.9919 contra 1.98289). Erro de conta meu, propagado para a aprovacao do
+  usuario e para o PLANO_8_9_10.md. NAO altera o pre-registro: o ponto segue
+  acima do limiar e o discriminador e' o mesmo -- so' fica MAIS severo, por
+  estar mais perto. Corrigido aqui em vez de silenciosamente reescrito.
 
 P4 -- A ENTRADA espuria interage com as ENTRADAS legitimas (retornos reais).
   Reportar espurias/legitimas por celula. REGRA DE CLASSIFICACAO, fixada aqui

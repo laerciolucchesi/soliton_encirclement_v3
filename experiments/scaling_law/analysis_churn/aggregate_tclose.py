@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""A SEGUNDA METADE do resultado: a coordenacao compra a INCLINACAO, nao o piso.
+"""A SEGUNDA METADE do resultado: a coordenacao atua sobre a INCLINACAO, nao sobre o piso.
 
 DECOMPOSICAO DA BRECHA (moldura, fixada antes do dado):
-    pico            -> NULO em duas analises independentes  = "nao compra o piso"
-    t_close / area  -> 1,28-1,42x na campanha de falha unica = "compra a inclinacao"
+    pico            -> NULO em duas analises independentes  = "nao atua sobre o piso"
+    t_close / area  -> 1,28-1,42x na campanha de falha unica = "atua sobre a inclinacao"
 Este script mede a SEGUNDA metade SOB CHURN, no mesmo desenho pareado por evento
 ja construido e validado. So muda o desfecho: em vez do PICO de G_max, a AREA da
 brecha e o TEMPO ate fechar.
@@ -164,8 +164,8 @@ def main():
     say("=" * 78)
     say("AREA DE BRECHA e t_close SOB CHURN -- a segunda metade da decomposicao")
     say("=" * 78)
-    say("pico            -> NULO (duas analises independentes) = nao compra o piso")
-    say("t_close / area  -> 1,28-1,42x na falha unica          = compra a inclinacao")
+    say("pico            -> NULO (duas analises independentes) = nao atua sobre o piso")
+    say("t_close / area  -> 1,28-1,42x na falha unica          = atua sobre a inclinacao")
     say("Aqui: a segunda metade SOB CHURN, mesmo desenho pareado por evento.")
     gate()
 

@@ -1098,3 +1098,62 @@ manifest before writing the final CSV, and the affected row was recovered. (b) `
 rendered by `protocol_target.finish()` on EVERY cell of EVERY sweep — `SKIP_TELEMETRY_PLOTS` is
 honoured by `plot_telemetry.py` only. Not fixed here (it is campaign-wide, not specific to this
 phase), but it is wasted work in every runner.
+
+---
+
+## 2026-08-03 — Phase 8a (ii): churn under locality. P3 confirmed; the departure pulse, not the spurious arrival, is the cause
+
+**Hypotheses, pre-registered and committed before the grid ran** (`ed49545`, amended `26d3441`
+and `50d24bb`, all pre-analysis). *P3*: the effective `c**` rises above `2cos(pi/N) = 1.9829`
+under churn, because gaps reach ~2x the ideal; discriminator `c = 2.0`, which sits +0.46% above
+the uniform threshold. *P4*: report the spurious/legitimate ENTRADA ratio, with the
+classification rule fixed in advance.
+
+**Experiment.** 80 cells: c in {1.61, 1.99, 3.01}, churn 12/min total, recovery 8 s, budget
+150 s, N=24, uplink 200 m, 8 paired seeds, baseline vs B2; `AGENT_STATE_TIMEOUT` treated as a
+factor (0.25 and 1.0 s) at c <= 2. All rows `dirty=False`. `comm_churn_results.csv`,
+`comm_churn_events.csv`. Full write-up: [COMM_RANGE.md](COMM_RANGE.md); thesis-facing summary:
+[HANDOFF_COMM_RANGE.md](HANDOFF_COMM_RANGE.md).
+
+**P3 — CONFIRMED.** Advantage (baseline/B2 on `egap_mean_steady20`): 0.55x and 0.69x at c=1.61,
+0.64x and 0.65x at c=1.99, **1.19x at c=3.01**. B2 better in 0/8 seeds in all four harmful
+conditions and 8/8 in the good one — 40 paired comparisons, no inversion. The same range that
+gave B2 a 1.39x advantage under a single fault gives 0.64x under churn, so `c** ∈ (1.99, 3.01]`.
+The uniform-ring threshold is not conservative once the ring is disturbed.
+
+**P4 — measured, and it refuted my own mid-sweep hypothesis.** Spurious/legitimate falls
+monotonically with range: 4.68, 2.35, 1.00, 0.65, 0.18. Twice during the sweep I claimed the
+harm was not proportional to the spurious rate and posited a residual execution-latency cost.
+The completed grid says otherwise, and identifies a better cause: SAIDA completions per run are
+**33** at c=1.61 (for 28 deaths), 222 at c=1.99, **532** at c=3.01 (~= the 520 ENTRADA). Below
+the 2-hop chord the departure pulse does not circulate AT ALL, so the overlay executes almost
+exclusively sign-inverted corrections because the correct one never arrives. The advantage flips
+exactly where the SAIDA starts landing. **The spurious arrival is the symptom; the missing
+departure is the cause.**
+
+**Cost while it fails:** control effort ~2x the baseline in every condition with ZERO
+saturation, and time in breach 0.86 vs 0.51 at c=1.61 — the swarm acts continuously on the wrong
+target rather than stalling.
+
+**Censoring as an instrument** (as the user asked): the strict 1.10 criterion separates the
+methods only at c=3.01 (baseline 8/8 censored, B2 5/8). Everywhere else both are 8/8.
+
+**The peak is untouched**, per-event 1.84-1.96, identical between methods in all five
+conditions including the one where B2 wins — consistent with the `2(M-1)/M` expectation in
+BREACH_WINDOW.
+
+**Process record.** Three corrections are on the record inside the pre-registration block, all
+pre-analysis except the last, which is arithmetic only: the P4 primary rule moved from
+cyclic-id to MEASURED ANGULAR successor (ids do not identify ring position; the new
+`order_swap_frac` sentinel shows the two orders disagree 54-74% of the time under churn, so the
+old premise was wrong almost always, and differently wrong in each method's geometry); the
+uplink sentinel needed three versions before the model was right (the target's alive count is
+the UNION of the live set over a trailing window, not a lagged sample — deaths and returns
+superpose); and the pre-registered "0.9% above threshold" was actually +0.46%, an arithmetic
+error that propagated into the approval and into PLANO_8_9_10.md without changing the verdict.
+
+**Thesis impact.** A new axis with a DERIVED threshold tested 0.46% away from it; a
+characterised defect (B2 worse than nothing below the threshold, 40/40); a design rule with a
+number (`2*R*sin(2*pi/N)`, and strictly more under churn); and an architectural limit of the
+neighbour-only premise itself — under finite range, "came into range" and "joined the ring" are
+locally indistinguishable, and no parameter fixes it.
