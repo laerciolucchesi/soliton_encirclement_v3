@@ -83,6 +83,19 @@ REGRAS DA CAMPANHA ativas: contar observacoes independentes (n_run por celula
   = 8 sementes; eventos nao sao independentes); media so com janela nomeada;
   sentinela aborta em vez de devolver vazio; mediana+IQR+n em toda tabela.
 
+EMENDA PRE-ANALISE -- 2026-08-04, apos o aborto da A4 na celula 3 (nenhuma
+  linha da grade foi lida como resultado; as 2 celulas parciais foram
+  descartadas). A A4 disparou como desenhada e a causa era ARITMETICA DO
+  RUNNER, nao a implementacao: o alcance era recalculado de c*2R*sin(pi/N)
+  com c arredondado a 4 digitos (1.6089), dando 8.40014 m em vez do 8.4 m
+  canonico da 8a -- 0.14 mm que apos 132.7 s viram uma entrega marginal e um
+  evento 2 ticks atrasado. Prova de inercia da implementacao: HEAD com 8.4
+  LITERAL reproduz a referencia de 50d24bb byte a byte (telemetria E eventos).
+  Conserto: os METROS sao os literais canonicos (8.4/15.7 em N=24; 4.041/7.553
+  em N=50) e c passa a ser o valor DERIVADO, so para exibicao. Os blocos de
+  N=50 nao tem referencia a reproduzir, mas ficam literais pela mesma razao
+  (proveniencia estavel sob rearredondamento).
+
 Uso:
     python experiments/scaling_law/run_m2_campaign.py            # requer M2C_GO=1
     # env: M2C_DRY_RUN=1 (imprime grade e custo, nada roda)
@@ -116,7 +129,6 @@ CCS_RUNS = os.path.join(EXP_DIR, "comm_churn_runs")   # sentinela A4
 
 METHODS = ("baseline", "m2", "dual_pulse")
 SEEDS = [int(x) for x in os.environ.get("M2C_SEEDS", "0,1,2,3,4,5,6,7").split(",") if x.strip()]
-C_VALUES = (1.6089, 3.0071)
 DT = 0.05
 FD = 0.25
 RATE_TOTAL = 12.0
@@ -131,26 +143,35 @@ GO = os.environ.get("M2C_GO", "").strip().lower() in ("1", "true", "yes", "y")
 PROGRESS_EVERY = 8
 BLOCK_FILTER = {b.strip().upper() for b in os.environ.get("M2C_BLOCKS", "").split(",") if b.strip()}
 
-# blocos: (letra, N, regime, c)
+# Metros LITERAIS canonicos (emenda 2026-08-04): em N=24 sao os da fase 8a --
+# obrigatorios para a A4-INERCIA reproduzir comm_churn_runs byte a byte; em
+# N=50 sao os do adendo A.4 item 2. c e' DERIVADO deles, apenas para exibicao.
+RANGE_M_CANON = {(24, "lo"): 8.4, (24, "hi"): 15.7, (50, "lo"): 4.041, (50, "hi"): 7.553}
+
+# blocos: (letra, N, regime, chave_de_alcance)
 BLOCKS = [
-    ("C", 24, "churn", 1.6089), ("D", 24, "churn", 3.0071),
-    ("A", 24, "clean", 1.6089), ("B", 24, "clean", 3.0071),
-    ("G", 50, "churn", 1.6089), ("H", 50, "churn", 3.0071),
-    ("E", 50, "clean", 1.6089), ("F", 50, "clean", 3.0071),
+    ("C", 24, "churn", "lo"), ("D", 24, "churn", "hi"),
+    ("A", 24, "clean", "lo"), ("B", 24, "clean", "hi"),
+    ("G", 50, "churn", "lo"), ("H", 50, "churn", "hi"),
+    ("E", 50, "clean", "lo"), ("F", 50, "clean", "hi"),
 ]
 
 
-def range_m(n, c):
+def range_m(n, ckey):
+    return RANGE_M_CANON[(n, ckey)]
+
+
+def c_of(n, ckey):
     import math
-    return c * 2.0 * R_ENC * math.sin(math.pi / n)
+    return RANGE_M_CANON[(n, ckey)] / (2.0 * R_ENC * math.sin(math.pi / n))
 
 
 def victim(n, seed):
     return 2 + ((n // 2 + seed) % n)
 
 
-def cell_env(block, n, regime, c, method, seed, run_dir):
-    rng_m = range_m(n, c)
+def cell_env(block, n, regime, ckey, method, seed, run_dir):
+    rng_m = range_m(n, ckey)
     env = dict(os.environ)
     dur = T0 + (CHURN_BUDGET if regime == "churn" else CLEAN_BUDGET)
     env.update({
@@ -163,7 +184,7 @@ def cell_env(block, n, regime, c, method, seed, run_dir):
         "EXPERIMENT_SEED": str(seed), "EXPERIMENT_REPRODUCIBLE": "True",
         "METRICS_T0": "0.0", "PROTECTION_ANGLE_DEG": "360",
         "COMM_ROLE_AWARE_RANGES": "True",
-        "COMM_RANGE_AGENT_AGENT": f"{rng_m:.6g}",
+        "COMM_RANGE_AGENT_AGENT": f"{rng_m:g}",
         "COMM_RANGE_AGENT_TARGET": f"{UPLINK:g}",
         "COMMUNICATION_TRANSMISSION_RANGE": f"{UPLINK:g}",
         "COMMUNICATION_DELAY": "0.0", "COMMUNICATION_FAILURE_RATE": "0.0",
@@ -194,12 +215,12 @@ def cell_env(block, n, regime, c, method, seed, run_dir):
     return env
 
 
-def sentinel_inertness(block, n, c, method, seed, run_dir):
+def sentinel_inertness(block, n, ckey, method, seed, run_dir):
     """A4: blocos C/D baseline+overlay byte-identicos as celulas da 8a-(ii)."""
     if block not in ("C", "D") or method == "m2":
         return
     m_dir = "baseline" if method == "baseline" else "dual_pulse"
-    aa = {1.6089: "8.4", 3.0071: "15.7"}[c]
+    aa = f"{RANGE_M_CANON[(24, ckey)]:g}"
     ref = os.path.join(CCS_RUNS, f"{m_dir}_aa{aa}_fd0.25_s{seed}", "target_telemetry.csv")
     got = os.path.join(run_dir, "target_telemetry.csv")
     if not os.path.exists(ref):
@@ -234,9 +255,9 @@ def guard_metrics(run_dir, dur):
     return out
 
 
-def run_cell(block, n, regime, c, method, seed):
+def run_cell(block, n, regime, ckey, method, seed):
     tag = {"baseline": "baseline", "m2": "m2", "dual_pulse": "B2"}[method]
-    run_dir = os.path.join(RUNS_DIR, f"{block}_{method}_N{n}_c{c:g}_s{seed}")
+    run_dir = os.path.join(RUNS_DIR, f"{block}_{method}_N{n}_r{range_m(n, ckey):g}_s{seed}")
     os.makedirs(run_dir, exist_ok=True)
     for fn in ("target_telemetry.csv", "events.csv"):
         p = os.path.join(run_dir, fn)
@@ -244,9 +265,9 @@ def run_cell(block, n, regime, c, method, seed):
             os.remove(p)
     dur = T0 + (CHURN_BUDGET if regime == "churn" else CLEAN_BUDGET)
 
-    print(f"  -> {block} {tag:8s} N={n:<3d} c={c:<7g} s={seed} ...", end="", flush=True)
+    print(f"  -> {block} {tag:8s} N={n:<3d} r={range_m(n, ckey):<7g} s={seed} ...", end="", flush=True)
     proc = subprocess.run([sys.executable, MAIN_PY], cwd=run_dir,
-                          env=cell_env(block, n, regime, c, method, seed, run_dir),
+                          env=cell_env(block, n, regime, ckey, method, seed, run_dir),
                           capture_output=True, text=True, encoding="utf-8", errors="replace")
 
     # sentinelas de modulo compartilhado operam com o N desta celula
@@ -254,7 +275,7 @@ def run_cell(block, n, regime, c, method, seed):
     rcrs.N = n
     checks = ccs.assert_cell(f"{tag} {block} s={seed}", run_dir, proc.stdout, FD)
     sentinel_sidecar(method, run_dir)
-    sentinel_inertness(block, n, c, method, seed, run_dir)
+    sentinel_inertness(block, n, ckey, method, seed, run_dir)
 
     agent_csv = os.path.join(run_dir, "agent_telemetry.csv")
     at_df = None
@@ -290,8 +311,9 @@ def run_cell(block, n, regime, c, method, seed):
     )
     m.update(checks)
     m.update({
-        "block": block, "method": tag, "N": n, "regime": regime, "c_hops": c,
-        "range_aa_m": round(range_m(n, c), 4), "range_at": UPLINK,
+        "block": block, "method": tag, "N": n, "regime": regime,
+        "c_hops": round(c_of(n, ckey), 6),
+        "range_aa_m": range_m(n, ckey), "range_at": UPLINK,
         "fd_timeout": FD, "rate_total": RATE_TOTAL if regime == "churn" else 0.0,
         "seed": seed, "dt": DT, "run_duration_s": dur,
         "tx_rows_steady20": tx_rows_steady20,
@@ -307,17 +329,17 @@ def run_cell(block, n, regime, c, method, seed):
 
 def cells():
     out = []
-    for (b, n, regime, c) in BLOCKS:
+    for (b, n, regime, ckey) in BLOCKS:
         if BLOCK_FILTER and b not in BLOCK_FILTER:
             continue
         for seed in SEEDS:
             for method in METHODS:
-                out.append((b, n, regime, c, method, seed))
+                out.append((b, n, regime, ckey, method, seed))
     return out
 
 
 def _key(r):
-    return (str(r["block"]), str(r["method"]), int(r["N"]), round(float(r["c_hops"]), 6), int(r["seed"]))
+    return (str(r["block"]), str(r["method"]), int(r["N"]), round(float(r["range_aa_m"]), 4), int(r["seed"]))
 
 
 def print_grid():
@@ -327,10 +349,10 @@ def print_grid():
     est = n24 * 45 + n50 * 124
     print("Item 9 -- campanha m=2 (pre-registro no docstring)")
     print(f"  {'bloco':>6} {'N':>4} {'regime':>7} {'c':>8} {'alcance':>9} {'celulas':>8}")
-    for (b, n, regime, c) in BLOCKS:
+    for (b, n, regime, ckey) in BLOCKS:
         if BLOCK_FILTER and b not in BLOCK_FILTER:
             continue
-        print(f"  {b:>6} {n:>4} {regime:>7} {c:>8g} {range_m(n, c):>8.3f}m {len(SEEDS) * len(METHODS):>8}")
+        print(f"  {b:>6} {n:>4} {regime:>7} {c_of(n, ckey):>8.4f} {range_m(n, ckey):>8.3f}m {len(SEEDS) * len(METHODS):>8}")
     print(f"\n  TOTAL = {len(grid)} celulas | custo MEDIDO ~ {est / 60:.0f} min "
           f"(45 s/celula N=24, 124 s N=50, calibrado na fumaca)")
     print(f"  predicoes: P5 3.1565 (N=24) / 3.1970 (N=50); P6 overlay>=m2>baseline, cruzada 5.0x;")
@@ -359,11 +381,11 @@ def main():
 
     grid = cells()
     done = 0
-    for (b, n, regime, c, method, seed) in grid:
+    for (b, n, regime, ckey, method, seed) in grid:
         tag = {"baseline": "baseline", "m2": "m2", "dual_pulse": "B2"}[method]
-        if (b, tag, n, round(c, 6), seed) in store:
+        if (b, tag, n, round(range_m(n, ckey), 4), seed) in store:
             continue
-        r = run_cell(b, n, regime, c, method, seed)
+        r = run_cell(b, n, regime, ckey, method, seed)
         done += 1
         if r:
             store[_key(r)] = r
