@@ -47,6 +47,9 @@ from config_param import (
     K_R,
     K_DR,
     K_OMEGA_DAMP,
+    M2_W2,
+    M2_GAIN_SCALE,
+    M2_STEADY_T0,
     FAILURE_CHECK_PERIOD,
     FAILURE_CHECK_TIMER_STR,
     FAILURE_ENABLE,
@@ -183,14 +186,26 @@ class AgentProtocol(IProtocol):
         self.du_from_e_tau: float = 0.0
 
 
-        # Propagation layer — method selected at runtime via main.py menu
+        # Propagation layer — method selected at runtime via main.py menu.
+        # "m2" (densified direct coupling, item 9) rides the SAME selector axis:
+        # it uses the baseline (no-op) propagation layer and flips a local flag
+        # that re-keys the e_tau law. Single seam, no parallel selector — see
+        # docs/experiments/SCOPING_M2.md §7.
         _prop_method = os.environ.get("PROPAGATION_METHOD", "baseline")
+        self._m2_enabled: bool = (_prop_method == "m2")
+        _layer_method = "baseline" if self._m2_enabled else _prop_method
         _prop_k_prop = float(os.environ.get("PROPAGATION_K_PROP", "0.0"))
         try:
             _prop_params = json.loads(os.environ.get("PROPAGATION_PARAMS", "{}"))
         except Exception:
             _prop_params = {}
-        self.prop_layer = create_propagation_layer(_prop_method, _prop_params)
+        if self._m2_enabled and _prop_k_prop != 0.0:
+            # Unplanned combination: m2 does not use the u_prop channel. Abort
+            # loudly instead of running a hybrid nobody pre-registered.
+            raise AssertionError(
+                f"m2 selected with PROPAGATION_K_PROP={_prop_k_prop} != 0 — unplanned combination"
+            )
+        self.prop_layer = create_propagation_layer(_layer_method, _prop_params)
         self._prop_k_prop: float = _prop_k_prop
         self.last_prop_signal: float = 0.0
 
@@ -204,6 +219,22 @@ class AgentProtocol(IProtocol):
         # passthrough mode (the recovered drone forwards but skips self-shift).
         if self.dual_pulse_layer is not None:
             self.dual_pulse_layer.set_owner_id(int(self.node_id))
+        # Defensive form of the inexpressible combination (single-valued axis):
+        # m2 maps to the baseline layer, so dual_pulse_layer must be None here.
+        assert not (self._m2_enabled and self.dual_pulse_layer is not None), (
+            "m2 and dual_pulse simultaneously active — selector invariant broken"
+        )
+
+        # m2 guard counters (pin (b) telemetry; written as a sidecar CSV in
+        # finish() so the agent_telemetry column contract stays untouched).
+        # "steady" = t >= M2_STEADY_T0, the campaign's steady20 window.
+        self._m2_ticks_total: int = 0
+        self._m2_k2_dropped: int = 0
+        self._m2_k2_toggles: int = 0
+        self._m2_ticks_steady: int = 0
+        self._m2_k2_dropped_steady: int = 0
+        self._m2_k2_toggles_steady: int = 0
+        self._m2_prev_dropped: Optional[bool] = None
         # Previous target-relative angle, used to compute realized angular
         # displacement between control ticks and feed it to consume_motion().
         # Initialized lazily on the first tick when theta_i is available.
@@ -537,6 +568,72 @@ class AgentProtocol(IProtocol):
             return 0.0
         return val
 
+    def _lambda_of(self, agent_id: Optional[int]) -> float:
+        """λ of one arc from the latest TargetState.alive_lambdas; 1.0 fallback."""
+        if agent_id is None or self.target_state is None:
+            return 1.0
+        ts, _ = self.target_state
+        lambdas = getattr(ts, "alive_lambdas", None) or {}
+        if not isinstance(lambdas, dict):
+            return 1.0
+        v = lambdas.get(int(agent_id))
+        if v is None:
+            v = lambdas.get(str(int(agent_id)))
+        try:
+            f = float(v)
+        except Exception:
+            return 1.0
+        return f if (math.isfinite(f) and f > 0.0) else 1.0
+
+    def _m2_error_or_none(
+        self, now: float, own_position, pred_gap: Optional[float], succ_gap: Optional[float]
+    ) -> Optional[float]:
+        """Scaled m=2 combined error, or None when the guard drops the k=2 term.
+
+        None ⇒ the caller feeds e⁽¹⁾ with NO scaling — float-for-float the
+        baseline path (pin (b): the guard restores law AND gain). The k=2 term
+        is the SAME spacing law at hop 2: weights are the sums of the λ of the
+        arcs the span crosses (SCOPING_M2 §1.2), no hysteresis (addendum A.3).
+        Also updates the guard counters for the m2_guard.csv sidecar.
+        """
+        dropped = True
+        e_m2: Optional[float] = None
+
+        vr = self._visible_ring(now, own_position)
+        if vr is not None and pred_gap is not None and succ_gap is not None:
+            ring, self_idx, theta_i, _theta_by_id, _alive = vr
+            sec = self.second_neighbors_from_ring(ring, self_idx)
+            if sec is not None:
+                p2_id, s2_id, p2_theta, s2_theta, p1_id, s1_id = sec
+                g_pred_2 = self.wrap_to_2pi(theta_i - p2_theta)
+                g_succ_2 = self.wrap_to_2pi(s2_theta - theta_i)
+                lam_pred_2 = self._lambda_of(p2_id) + self._lambda_of(p1_id)
+                lam_succ_2 = self._lambda_of(int(self.node_id)) + self._lambda_of(s1_id)
+                e1 = self.compute_spacing_error(pred_gap, succ_gap, self.lp_pred, self.lp_succ)
+                e2 = self.compute_spacing_error(g_pred_2, g_succ_2, lam_pred_2, lam_succ_2)
+                w2 = float(M2_W2)
+                combined = (float(e1) + w2 * float(e2)) / (1.0 + w2)
+                candidate = float(M2_GAIN_SCALE) * combined
+                if math.isfinite(candidate):
+                    e_m2 = candidate
+                    dropped = False
+
+        # Guard bookkeeping (chattering measured as toggle EDGES, addendum A.3).
+        self._m2_ticks_total += 1
+        in_steady = float(now) >= float(M2_STEADY_T0)
+        if in_steady:
+            self._m2_ticks_steady += 1
+        if dropped:
+            self._m2_k2_dropped += 1
+            if in_steady:
+                self._m2_k2_dropped_steady += 1
+        if self._m2_prev_dropped is not None and dropped != self._m2_prev_dropped:
+            self._m2_k2_toggles += 1
+            if in_steady:
+                self._m2_k2_toggles_steady += 1
+        self._m2_prev_dropped = dropped
+        return e_m2
+
     def compute_e_tau_used(
         self,
         *,
@@ -544,9 +641,20 @@ class AgentProtocol(IProtocol):
         succ_gap: Optional[float],
         t_hat: Optional[Tuple[float, float]] = None,
         r_eff: Optional[float] = None,
+        e_tau_base: Optional[float] = None,
     ) -> Tuple[float, float, float]:
-        """Compute e_tau and optionally apply local omega damping."""
-        e_tau = self.compute_spacing_error(pred_gap, succ_gap, self.lp_pred, self.lp_succ)
+        """Compute e_tau and optionally apply local omega damping.
+
+        ``e_tau_base``: when provided (m2 arm with the k=2 term alive), it
+        replaces the internal m=1 spacing error as the base error; the omega
+        damping path applies on top identically. When None — every baseline /
+        overlay call, and every DEGRADED m2 tick — the computation below is the
+        original one, untouched.
+        """
+        if e_tau_base is not None and math.isfinite(float(e_tau_base)):
+            e_tau = float(e_tau_base)
+        else:
+            e_tau = self.compute_spacing_error(pred_gap, succ_gap, self.lp_pred, self.lp_succ)
         e_tau_eff = float(e_tau)
 
         if (
@@ -761,12 +869,18 @@ class AgentProtocol(IProtocol):
 
         return (vx, vy, vz)
 
-    def get_two_neighbors(
-        self, now: float, own_position
-    ) -> Tuple[Optional[int], Optional[int], Optional[float], Optional[float], int, Optional[float]]:
-        """Select predecessor/successor around the target using only locally received states."""
+    def _visible_ring(self, now: float, own_position):
+        """Single construction of the fresh visible ring, shared by the m=1 and
+        m=2 neighbour selections (extracted behaviour-preserving from
+        get_two_neighbors; SCOPING_M2 §1.3 — one ring construction, no drift).
+
+        Returns (ring, self_idx, theta_i, theta_by_id, alive_count) or None when
+        the target is not alive. ``ring`` is sorted by (theta, id) and includes
+        self; stale entries are filtered by AGENT_STATE_TIMEOUT here, so every
+        member is fresh by construction.
+        """
         if not self._target_is_alive(now):
-            return None, None, None, None, 0, None
+            return None
 
         target_state, _ = self.target_state  # type: ignore[assignment]
         target_pos = target_state.position
@@ -783,15 +897,42 @@ class AgentProtocol(IProtocol):
 
         theta_by_id = {int(agent_id): float(theta_j) for agent_id, theta_j in candidates}
 
-        alive_count = len(candidates)
-        if alive_count == 0:
-            return None, None, None, None, 0, theta_i
-
         ring: list[tuple[float, int]] = [(theta_i, int(self.node_id))]
         ring.extend((theta_j, int(agent_id)) for agent_id, theta_j in candidates)
         ring.sort(key=lambda x: (x[0], x[1]))
 
         self_idx = next((k for k, (_, aid) in enumerate(ring) if aid == int(self.node_id)), None)
+        return ring, self_idx, theta_i, theta_by_id, len(candidates)
+
+    @staticmethod
+    def second_neighbors_from_ring(ring, self_idx):
+        """(pred2_id, succ2_id, pred2_theta, succ2_theta, pred1_id, succ1_id) or None.
+
+        Anti-aliasing guard (SCOPING_M2 §3 / addendum A.3): with a visible ring
+        of fewer than 5 fresh members, ring[self±2] wraps onto pred1/succ1/self —
+        the k=2 term would act on the wrong node with the wrong sign. None means
+        the k=2 term is dropped this tick and the law degrades to m=1.
+        """
+        if self_idx is None or ring is None or len(ring) < 5:
+            return None
+        n = len(ring)
+        p2_theta, p2_id = ring[(self_idx - 2) % n]
+        s2_theta, s2_id = ring[(self_idx + 2) % n]
+        p1_id = int(ring[(self_idx - 1) % n][1])
+        s1_id = int(ring[(self_idx + 1) % n][1])
+        return int(p2_id), int(s2_id), float(p2_theta), float(s2_theta), p1_id, s1_id
+
+    def get_two_neighbors(
+        self, now: float, own_position
+    ) -> Tuple[Optional[int], Optional[int], Optional[float], Optional[float], int, Optional[float]]:
+        """Select predecessor/successor around the target using only locally received states."""
+        vr = self._visible_ring(now, own_position)
+        if vr is None:
+            return None, None, None, None, 0, None
+        ring, self_idx, theta_i, theta_by_id, alive_count = vr
+
+        if alive_count == 0:
+            return None, None, None, None, 0, theta_i
         if self_idx is None:
             return None, None, None, None, 0, theta_i
 
@@ -1113,12 +1254,20 @@ class AgentProtocol(IProtocol):
                 )
 
                 # Controller input uses the virtual gaps (identical to real
-                # gaps when dual_pulse is inactive).
+                # gaps when dual_pulse is inactive). In the m2 arm the combined
+                # k∈{1,2} error replaces the base error; on a degraded tick
+                # _m2_error_or_none returns None and the call below is the
+                # baseline computation, float for float (pin (b)).
+                _m2_base = (
+                    self._m2_error_or_none(now, position, pred_gap_used, succ_gap_used)
+                    if self._m2_enabled else None
+                )
                 e_tau, e_tau_eff, e_tau_used = self.compute_e_tau_used(
                     pred_gap=pred_gap_used,
                     succ_gap=succ_gap_used,
                     t_hat=t_hat,
                     r_eff=r_eff,
+                    e_tau_base=_m2_base,
                 )
                 self.last_e_tau = float(e_tau) if math.isfinite(e_tau) else 0.0
                 self.last_e_tau_eff = float(e_tau_eff) if math.isfinite(e_tau_eff) else self.last_e_tau
@@ -1625,6 +1774,31 @@ class AgentProtocol(IProtocol):
                         if not _exists:
                             _f.write("node_id,pulse_payloads_broadcast\n")
                         _f.write(f"{int(self.node_id)},{_n_msgs}\n")
+            except Exception:
+                pass
+
+        # m2 guard sidecar (pin (b) telemetry). Sibling CSV like the dual_pulse
+        # one, so the agent_telemetry column contract stays untouched. Columns
+        # decompose the drop by CAUSE, not by side: with the ring construction a
+        # side cannot be missing alone while the ring has >= 5 fresh members, so
+        # "per side" collapsed to "per cause" — declared, not hidden.
+        if getattr(self, "_m2_enabled", False) and self._csv_path:
+            try:
+                _m2_csv = os.path.join(
+                    os.path.dirname(os.path.abspath(self._csv_path)), "m2_guard.csv"
+                )
+                _exists = os.path.exists(_m2_csv)
+                with open(_m2_csv, "a", encoding="utf-8") as _f:
+                    if not _exists:
+                        _f.write(
+                            "node_id,ticks_total,k2_dropped,k2_toggles,"
+                            "ticks_steady20,k2_dropped_steady20,k2_toggles_steady20\n"
+                        )
+                    _f.write(
+                        f"{int(self.node_id)},{self._m2_ticks_total},{self._m2_k2_dropped},"
+                        f"{self._m2_k2_toggles},{self._m2_ticks_steady},"
+                        f"{self._m2_k2_dropped_steady},{self._m2_k2_toggles_steady}\n"
+                    )
             except Exception:
                 pass
 

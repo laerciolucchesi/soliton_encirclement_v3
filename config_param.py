@@ -870,3 +870,70 @@ METRICS_MA_W_SEC: float = 1.0
 # METRICS_SETTLE_WINDOW_SEC: continuous time window (seconds) required for M7 settling.
 # Example: 2.0 means "consider settled when e(t)<=E_THR continuously for 2 seconds".
 METRICS_SETTLE_WINDOW_SEC: float = 5.0
+
+# --------------------------------------------------------------------------------------
+# 12) m=2 densified coupling (item 9 -- external baseline; see docs/experiments/SCOPING_M2.md)
+# --------------------------------------------------------------------------------------
+# Selected via PROPAGATION_METHOD="m2" (same single axis that selects baseline vs
+# dual_pulse; no parallel selector). The law is the CURRENT spacing law
+# parameterised by hop count k, combined as a convex mean and rescaled so both
+# laws run at the SAME nominal sampled margin g*dt*lambda_max (SCOPING_M2
+# addendum A.1-A.2).
+#
+# M2_W2: weight of the k=2 term in the convex mean (e1 + w2*e2)/(1+w2).
+# Default 2.0 -- NOT 1.0: the span normalisation of e^(2) (its denominator is
+# its own 2-arc span) weights the k=2 term by 1/k, so w2=k restores equal
+# PHYSICAL weight per coupling, i.e. the uniform densified ring L1+L2 that the
+# pre-registered 3.16x prediction presupposes. w2=0 reduces to the baseline law
+# exactly (and forces gain scale 1.0 below).
+import math as _math
+
+try:
+    M2_W2: float = float(_os.environ.get("M2_W2", "2.0"))
+except ValueError:
+    M2_W2 = 2.0
+if not (_math.isfinite(M2_W2) and M2_W2 >= 0.0):
+    M2_W2 = 2.0
+
+
+def _m2_gain_scale_auto(n_agents: int, w2: float) -> float:
+    """lambda_max(L1) / lambda_max(A(w2)) over the DISCRETE ring modes.
+
+    A(w2) = (L1 + (w2/2)*L2)/(1+w2); eigenvalues at phi_k = 2*pi*k/N are
+    a(phi) = [2(1-cos phi) + w2*(1-cos 2phi)]/(1+w2). Closed-form, zero RNG,
+    so it is provenance-stable. N=24, w2=2 -> 1.9200956; N=50 -> 1.9242895
+    (pinned in SCOPING_M2 addendum A.2). w2=0 -> exactly 1.0.
+    """
+    n = max(3, int(n_agents))
+    if w2 <= 0.0:
+        return 1.0
+    lmax_l1 = 0.0
+    lmax_a = 0.0
+    for k in range(1, n):
+        phi = 2.0 * _math.pi * k / n
+        l1 = 2.0 * (1.0 - _math.cos(phi))
+        a = (l1 + w2 * (1.0 - _math.cos(2.0 * phi))) / (1.0 + w2)
+        lmax_l1 = max(lmax_l1, l1)
+        lmax_a = max(lmax_a, a)
+    return lmax_l1 / lmax_a if lmax_a > 0.0 else 1.0
+
+
+# M2_GAIN_SCALE: multiplier applied to the COMBINED error (not to the
+# controller's k_e_tau -- the error path is linear, so scaling the error is the
+# same loop and lets a degraded tick feed e^(1) unscaled, bit-identical to the
+# baseline path; SCOPING_M2 addendum A.3). "auto" computes from NUM_AGENTS and
+# M2_W2; a numeric env value overrides (pin it in campaign runners).
+_m2_scale_raw = _os.environ.get("M2_GAIN_SCALE", "auto").strip().lower()
+if _m2_scale_raw == "auto":
+    M2_GAIN_SCALE: float = _m2_gain_scale_auto(NUM_AGENTS, M2_W2)
+else:
+    try:
+        M2_GAIN_SCALE = float(_m2_scale_raw)
+    except ValueError:
+        M2_GAIN_SCALE = _m2_gain_scale_auto(NUM_AGENTS, M2_W2)
+if not (_math.isfinite(M2_GAIN_SCALE) and M2_GAIN_SCALE > 0.0):
+    M2_GAIN_SCALE = 1.0
+
+# Steady-window start used by the m2 guard sidecar counters (matches the
+# campaign's steady20 convention: T0=5 + WARMUP_AVG=15).
+M2_STEADY_T0: float = 20.0

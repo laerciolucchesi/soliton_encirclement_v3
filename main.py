@@ -84,11 +84,12 @@ _METHODS = [
     ("alarm",      "Discrete alarms with TTL"),
     ("burgers",    "Damped Burgers with saturation"),
     ("dual_pulse", "Dual counter-propagating pulses with hop-count topology discovery"),
+    ("m2",         "Densified m=2 direct coupling (no relay) - external baseline, item 9"),
 ]
 
 # Methods that do NOT use the u_prop channel (k_prop irrelevant; menu skips
 # the prompt). Keep this list in sync with method semantics in propagation_layer.
-_METHODS_WITHOUT_K_PROP = {"baseline", "dual_pulse"}
+_METHODS_WITHOUT_K_PROP = {"baseline", "dual_pulse", "m2"}
 
 
 def _select_propagation_method() -> tuple:
