@@ -28,6 +28,16 @@ except Exception:
     pass
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+LANG = os.environ.get("FIG_LANG", "pt").strip().lower()
+OUT_DIR = os.environ.get("FIG_OUT_DIR", HERE)
+
+
+def T(pt, en):
+    """Seletor de texto da FIGURA: default pt (saida identica a committada);
+    FIG_LANG=en da a variante em ingles para o draft v3. NENHUM valor muda aqui
+    -- so idioma dos rotulos (e virgula decimal -> ponto nas literais traduzidas)."""
+    return en if LANG == "en" else pt
+
 R_ENC = 20.0
 USABLE = (6.0, 12.0, 24.0)
 
@@ -72,15 +82,19 @@ def main():
     lim = float(np.quantile(np.abs(dd), 0.98))
     axA.hist(dd, bins=np.linspace(-lim, lim, 51), color="0.7", edgecolor="0.45")
     axA.axvline(0.0, color="0.25", ls="--", lw=1.5)
-    axA.axvline(med, color="seagreen", lw=2.0, label=f"mediana {med:+.3f} m")
-    axA.axvline(mean, color="darkorange", lw=2.0, label=f"media {mean:+.3f} m")
+    axA.axvline(med, color="seagreen", lw=2.0, label=T(f"mediana {med:+.3f} m", f"median {med:+.3f} m"))
+    axA.axvline(mean, color="darkorange", lw=2.0, label=T(f"media {mean:+.3f} m", f"mean {mean:+.3f} m"))
     axA.axvline(mean_no_top, color="firebrick", lw=1.6, ls=":",
-                label=f"media sem o decil sup. {mean_no_top:+.3f} m")
-    axA.set_xlabel("d_arco = arco(baseline) − arco(B2), MESMO evento [m]")
-    axA.set_ylabel("eventos")
-    axA.set_title(f"A) diferenca pareada: media e mediana DISCORDAM em magnitude\n"
-                  f"{frac_pos:.1%} dos eventos com baseline pior "
-                  f"(moeda = 50%)", fontweight="bold")
+                label=T(f"media sem o decil sup. {mean_no_top:+.3f} m",
+                        f"mean excl. top decile {mean_no_top:+.3f} m"))
+    axA.set_xlabel(T("d_arco = arco(baseline) − arco(B2), MESMO evento [m]",
+                     "d_arc = arc(baseline) − arc(B2), SAME event [m]"))
+    axA.set_ylabel(T("eventos", "events"))
+    axA.set_title(T(f"A) diferenca pareada: media e mediana DISCORDAM em magnitude\n"
+                    f"{frac_pos:.1%} dos eventos com baseline pior (moeda = 50%)",
+                    f"A) paired difference: mean and median DISAGREE in magnitude\n"
+                    f"{frac_pos:.1%} of events with the baseline worse (coin flip = 50%)"),
+                  fontweight="bold")
     axA.legend(fontsize=8); axA.grid(alpha=0.3)
 
     # ---- B: diferenca pareada por taxa + agregado -------------------------
@@ -90,7 +104,7 @@ def main():
         g = s.seed.astype(str).to_numpy()
         m_, _, l_, h_, _, n_ = cluster_ci(s["d_arco"], g)
         labs.append(f"{r:g}/min"); mus.append(m_); los.append(l_); his.append(h_); ns.append(n_)
-    labs.append("agregado"); mus.append(mu); los.append(lo); his.append(hi); ns.append(n)
+    labs.append(T("agregado", "aggregate")); mus.append(mu); los.append(lo); his.append(hi); ns.append(n)
     y = np.arange(len(labs))
     axB.errorbar(mus, y, xerr=[np.array(mus) - np.array(los),
                                np.array(his) - np.array(mus)],
@@ -98,18 +112,22 @@ def main():
     axB.axvline(0.0, ls="--", color="0.35", lw=1.3)
     axB.set_yticks(y); axB.set_yticklabels([f"{a}\n(n={b})" for a, b in zip(labs, ns)])
     axB.invert_yaxis()
-    axB.set_xlabel("d_arco = arco(baseline) − arco(B2), MESMO evento [m]")
-    axB.set_title("B) diferenca pareada por evento\n(media; barras = IC95 agrupado por rodada)",
+    axB.set_xlabel(T("d_arco = arco(baseline) − arco(B2), MESMO evento [m]",
+                     "d_arc = arc(baseline) − arc(B2), SAME event [m]"))
+    axB.set_title(T("B) diferenca pareada por evento\n(media; barras = IC95 agrupado por rodada)",
+                    "B) paired difference per event\n(mean; bars = 95% CI clustered by run)"),
                   fontweight="bold")
     axB.grid(alpha=0.3, axis="x")
-    axB.annotate(f"agregado: {mu:+.3f} m  IC95 [{lo:+.3f}, {hi:+.3f}]  p = {pv:.3f}",
+    axB.annotate(T(f"agregado: {mu:+.3f} m  IC95 [{lo:+.3f}, {hi:+.3f}]  p = {pv:.3f}",
+                   f"aggregate: {mu:+.3f} m  95% CI [{lo:+.3f}, {hi:+.3f}]  p = {pv:.3f}"),
                  (0.5, 0.06), xycoords="axes fraction", ha="center", fontsize=8.5,
                  color="0.25")
 
-    fig.suptitle("Vao ABSOLUTO da brecha: efeito marginal e concentrado na cauda",
+    fig.suptitle(T("Vao ABSOLUTO da brecha: efeito marginal e concentrado na cauda",
+                   "ABSOLUTE breach gap: a marginal effect, concentrated in the tail"),
                  fontsize=12, fontweight="bold")
     med_run = d.groupby(["rate_total", "seed"])["d_arco"].median()
-    foot = (
+    foot = T(
         "MESMO EFEITO, DUAS NORMALIZACOES — os dois sao MARGINAIS e vao juntos:\n"
         f"   em metros (esta figura):   d_arco = {mu:+.3f} m,  p = {pv:.3f}\n"
         "   normalizado por 2*pi/M:    alpha_total = +0,0247,  p = 0,064\n"
@@ -122,12 +140,25 @@ def main():
         "   as medianas MARGINAIS vao na direcao oposta (11,19 m baseline vs 11,30 m B2)\n"
         "ESCOPO: taxas 6/12/24 (Pi_2' de 0,80 a 3,20); N=24, tau_xy=1 s, T_off=8 s, dt=0,05 s,\n"
         "8 sementes pareadas, regime NAO saturado (sat_frac=0). A taxa 48 esta FORA: declarada\n"
-        "nao identificavel para a analise por evento (mediana de W_e no piso de 0,6 s).")
+        "nao identificavel para a analise por evento (mediana de W_e no piso de 0,6 s).",
+        "SAME EFFECT, TWO NORMALISATIONS — both are MARGINAL and belong together:\n"
+        f"   in metres (this figure):   d_arc = {mu:+.3f} m,  p = {pv:.3f}\n"
+        "   normalised by 2*pi/M:      alpha_total = +0.0247,  p = 0.064\n"
+        "THE MEAN IS NOT THE TYPICAL EVENT — three qualifications that must travel with the number:\n"
+        f"   paired median = {med:+.3f} m (against mean {mean:+.3f} m);  "
+        f"{frac_pos:.1%} of events with the baseline worse\n"
+        f"   removing the top decile FLIPS THE SIGN of the mean: {mean_no_top:+.3f} m\n"
+        f"   per-run median: {float(med_run.median()):+.3f} m, "
+        f"{int((med_run > 0).sum())}/{len(med_run)} runs positive\n"
+        "   the MARGINAL medians point the opposite way (11.19 m baseline vs 11.30 m B2)\n"
+        "SCOPE: rates 6/12/24 (Pi_2' from 0.80 to 3.20); N=24, tau_xy=1 s, T_off=8 s, dt=0.05 s,\n"
+        "8 paired seeds, non-saturated regime (sat_frac=0). Rate 48 is OUT: declared\n"
+        "non-identifiable for the per-event analysis (median W_e at the 0.6 s floor).")
     fig.text(0.5, -0.10, foot, ha="center", va="top", fontsize=8, color="0.25",
              family="monospace")
     fig.tight_layout(rect=(0, 0.02, 1, 0.90))
     for ext in ("png", "pdf"):
-        out = os.path.join(HERE, f"fig_vao_absoluto.{ext}")
+        out = os.path.join(OUT_DIR, f"fig_vao_absoluto.{ext}")
         fig.savefig(out, dpi=300, bbox_inches="tight")
         print(f"gravado: {os.path.basename(out)}")
     plt.close(fig)

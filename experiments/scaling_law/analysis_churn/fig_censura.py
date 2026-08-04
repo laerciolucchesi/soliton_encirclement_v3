@@ -31,6 +31,16 @@ except Exception:
     pass
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+LANG = os.environ.get("FIG_LANG", "pt").strip().lower()
+OUT_DIR = os.environ.get("FIG_OUT_DIR", HERE)
+
+
+def T(pt, en):
+    """Seletor de texto da FIGURA: default pt (saida identica a committada);
+    FIG_LANG=en da a variante em ingles para o draft v3. NENHUM valor muda aqui
+    -- so idioma dos rotulos (e virgula decimal -> ponto nas literais traduzidas)."""
+    return en if LANG == "en" else pt
+
 RUNS = os.path.join(HERE, "rerun_runs")
 T0_WINDOW, W_MIN, W_MAX, T_OFF, N_AG = 20.0, 0.6, 1.5, 8.0, 24.0
 THRS = (1.25, 1.5)
@@ -213,17 +223,21 @@ def main():
     x = [pi2(r) for r in rates]
     for thr, color, mk in zip(THRS, ("firebrick", "royalblue"), ("o", "s")):
         axA.plot(x, cens[thr], marker=mk, color=color, lw=2.0,
-                 label=f"limiar $G_{{max}}$ > {thr:g}")
+                 label=T(f"limiar $G_{{max}}$ > {thr:g}", f"threshold $G_{{max}}$ > {thr:g}"))
     axA.axhline(1.0, ls=":", color="0.5", lw=1.2)
     axA.set_xscale("log"); axA.set_ylim(-0.03, 1.08)
-    axA.set_xlabel(r"$\Pi_2'$ = $\lambda_{anel}\cdot T_{off}$  (agentes ausentes)")
-    axA.set_ylabel("fracao de eventos CENSURADOS")
-    axA.set_title("A) a brecha nao fecha antes do proximo evento\n"
-                  "(censura = medida direta de $\\Pi_2$)", fontweight="bold")
+    axA.set_xlabel(T(r"$\Pi_2'$ = $\lambda_{anel}\cdot T_{off}$  (agentes ausentes)",
+                    r"$\Pi_2'$ = $\lambda_{ring}\cdot T_{off}$  (absent agents)"))
+    axA.set_ylabel(T("fracao de eventos CENSURADOS", "fraction of CENSORED events"))
+    axA.set_title(T("A) a brecha nao fecha antes do proximo evento\n"
+                    "(censura = medida direta de $\\Pi_2$)",
+                    "A) the breach does not close before the next event\n"
+                    "(censoring = a direct measure of $\\Pi_2$)"), fontweight="bold")
     axA.legend(loc="lower right"); axA.grid(alpha=0.3)
     for xi, r in zip(x, rates):
         axA.annotate(f"{r:g}/min", (xi, 0.02), ha="center", fontsize=7.5, color="0.35")
-    axA.annotate("taxa 48: EXCLUIDA da analise do pico,\nmedivel aqui",
+    axA.annotate(T("taxa 48: EXCLUIDA da analise do pico,\nmedivel aqui",
+                   "rate 48: EXCLUDED from the peak analysis,\nmeasurable here"),
                  (x[-1], cens[THRS[1]][-1]), xytext=(-8, -52),
                  textcoords="offset points", fontsize=7.5, color="0.3",
                  ha="right", arrowprops=dict(arrowstyle="->", color="0.5", lw=0.8))
@@ -233,28 +247,33 @@ def main():
     for i, thr in enumerate(THRS):
         pos, tie, neg = sign[thr]
         tot = pos + tie + neg
-        axB.barh(i, pos / tot, w, color="seagreen", label="B2 sai, baseline nao" if i == 0 else None)
+        axB.barh(i, pos / tot, w, color="seagreen",
+                 label=T("B2 sai, baseline nao", "B2 exits, baseline does not") if i == 0 else None)
         axB.barh(i, tie / tot, w, left=pos / tot, color="0.8",
-                 label="empate (nenhum sai)" if i == 0 else None)
+                 label=T("empate (nenhum sai)", "tie (neither exits)") if i == 0 else None)
         axB.barh(i, neg / tot, w, left=(pos + tie) / tot, color="firebrick",
-                 label="baseline sai, B2 nao" if i == 0 else None)
+                 label=T("baseline sai, B2 nao", "baseline exits, B2 does not") if i == 0 else None)
         axB.annotate(f"{pos}", (pos / tot / 2, i), ha="center", va="center",
                      fontsize=9, color="white", fontweight="bold")
         axB.annotate(f"{neg}", (1 - neg / tot / 2, i), ha="center", va="center",
                      fontsize=9, color="white", fontweight="bold")
         nz = pos + neg
-        axB.annotate(f"{pos}/{nz} = {pos/nz:.0%} a favor de B2 entre os nao-empatados",
+        axB.annotate(T(f"{pos}/{nz} = {pos/nz:.0%} a favor de B2 entre os nao-empatados",
+                       f"{pos}/{nz} = {pos/nz:.0%} in favor of B2 among the non-ties"),
                      (0.5, i + 0.26), ha="center", fontsize=8, color="0.25")
     axB.set_yticks(ypos)
     axB.set_yticklabels([f"$G_{{max}}$ > {t:g}" for t in THRS])
     axB.invert_yaxis(); axB.set_xlim(0, 1)
-    axB.set_xlabel("fracao dos pares de eventos")
-    axB.set_title("B) quem sai da brecha primeiro, no mesmo evento\n"
-                  "(proporcao; sem media, sem modelo)", fontweight="bold")
+    axB.set_xlabel(T("fracao dos pares de eventos", "fraction of event pairs"))
+    axB.set_title(T("B) quem sai da brecha primeiro, no mesmo evento\n"
+                    "(proporcao; sem media, sem modelo)",
+                    "B) who exits the breach first, in the same event\n"
+                    "(proportions; no mean, no model)"), fontweight="bold")
     axB.legend(fontsize=7.5, loc="center right", framealpha=0.95)
     axB.grid(alpha=0.3, axis="x")
 
-    fig.suptitle("A censura do $t_{close}$ e' o resultado, nao o obstaculo",
+    fig.suptitle(T("A censura do $t_{close}$ e' o resultado, nao o obstaculo",
+                   "The censoring of $t_{close}$ is the result, not the obstacle"),
                  fontsize=12.5, fontweight="bold")
     p125, _t125, n125 = sign[1.25]
     p15, _t15, n15 = sign[1.5]
@@ -264,7 +283,7 @@ def main():
         s = pair[pair.rate_total == r]["d_frac_1.5"].to_numpy(float)
         a_, b_ = int((s > 1e-12).sum()), int((s < -1e-12).sum())
         pr15.append(f"{r:g}/min: {a_}v{b_}")
-    foot = (
+    foot = T(
         f"LIMIAR 1,25: {p125}/{p125+n125} = {p125/(p125+n125):.0%} dos eventos DECIDIDOS a favor "
         f"do overlay (teste de sinal, p={stats.binomtest(p125,p125+n125,0.5).pvalue:.1e}),\n"
         f"   e a mesma direcao nas QUATRO taxas. Nao usa media, nao usa modelo, nao precisa de "
@@ -278,12 +297,26 @@ def main():
         "da recuperacao, no nivel 1,25.\n"
         "ESCOPO: N=24, tau_xy=1 s, T_off=8 s, dt=0,05 s, 8 sementes pareadas, regime NAO saturado. "
         "Painel A: janela ate o proximo\nevento (sem teto). Painel B: janela do pico, "
-        "W_e=clip(t_prox-t_f, 0,6, 1,5) s, identica nos dois bracos.")
+        "W_e=clip(t_prox-t_f, 0,6, 1,5) s, identica nos dois bracos.",
+        f"THRESHOLD 1.25: {p125}/{p125+n125} = {p125/(p125+n125):.0%} of DECIDED events in favor "
+        f"of the overlay (sign test, p={stats.binomtest(p125,p125+n125,0.5).pvalue:.1e}),\n"
+        f"   and the same direction at all FOUR rates. Uses no mean, no model, and needs no "
+        f"synthetic-null calibration.\n"
+        f"THRESHOLD 1.50: {p15}/{p15+n15} = {p15/(p15+n15):.0%} in aggregate, but DISCORDANT across "
+        f"rates ({'; '.join(pr15)}):\n"
+        f"   a coin flip at 6/12/24 (p=1.00 / 0.88 / 0.61) and an effect only at rate 48. This "
+        f"threshold's aggregate is NOT interpretable.\n"
+        "THE EFFECT IS THRESHOLD-DEPENDENT, and the two belong together. Consistent with the rest: "
+        "the peak is geometric (~1.9) and neither\nmethod escapes 1.5 quickly; the difference lives "
+        "in the recovery TAIL, at the 1.25 level.\n"
+        "SCOPE: N=24, tau_xy=1 s, T_off=8 s, dt=0.05 s, 8 paired seeds, non-saturated regime. "
+        "Panel A: window to the next\nevent (no cap). Panel B: peak window, "
+        "W_e=clip(t_next-t_f, 0.6, 1.5) s, identical in both arms.")
     fig.text(0.5, -0.02, foot, ha="center", va="top", fontsize=7.8, color="0.25",
              family="monospace")
     fig.tight_layout(rect=(0, 0.02, 1, 0.91))
     for ext in ("png", "pdf"):
-        out = os.path.join(HERE, f"fig_censura_pi2.{ext}")
+        out = os.path.join(OUT_DIR, f"fig_censura_pi2.{ext}")
         fig.savefig(out, dpi=300, bbox_inches="tight")
         say(f"\ngravado: {os.path.basename(out)}")
     plt.close(fig)
