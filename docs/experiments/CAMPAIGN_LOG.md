@@ -1157,3 +1157,36 @@ characterised defect (B2 worse than nothing below the threshold, 40/40); a desig
 number (`2*R*sin(2*pi/N)`, and strictly more under churn); and an architectural limit of the
 neighbour-only premise itself — under finite range, "came into range" and "joined the ring" are
 locally indistinguishable, and no parameter fixes it.
+
+---
+
+## 2026-08-04 — Item 9: the m=2 densified baseline, measured. The overlay's case narrows to one cell and strengthens there
+
+**Hypothesis / why.** The thesis dismissed direct m=2 coupling by argument; item 9 makes it a
+measured third line. Same radio requirement as the overlay (2-hop chord), same margin
+(fair-gain eigenvalue renormalisation, addendum A.2), same messages (proven per cell), same
+seeds. 192 cells, 8 blocks, all rows `dirty=False` at `ba44b18`. Pre-registration in the
+runner docstring; full write-up [HANDOFF_M2.md](HANDOFF_M2.md); scoping + addendum in
+[SCOPING_M2.md](SCOPING_M2.md).
+
+**Verdicts.** *P5* (clean speedup 3.16/3.20 derived): scale survives (2.5–3.8x depending on
+metric), digit does not; at N=50 the primary metric saturates (t_settle crosses threshold
+while the slow mode still decays — the DT_CROSSOVER trap mirrored) and the verdict rests on
+tau_fit (2.52, R2 caveat 0.84). *P6*: the pre-registered adverse outcome happened twice —
+dead tie with the overlay under churn at N=24 (1.003), INVERSION at N=50 (0.946, m2 better
+8/8; one B2 seed worse than baseline). *P7*: bit-exact m2==baseline below the chord in clean
+(both N), statistical identity under churn (0.997/1.000). *P8*: toggles to 0.97/s, benign.
+
+**The headline for 4.1.** The overlay's value proposition is now one cell of the design
+space, and it is strong there: single-event reconfiguration above the 2-hop chord — tau_fit
+20.4x over baseline and ~8x over densification at N=50, the flat-tau architecture doing
+exactly what the thesis claims, isolated by an equal-everything comparison. Under churn the
+overlay ties (N=24) then loses (N=50) to passive densification; below the chord it is harmful
+(and worse with N: 1.82 -> 2.59) where m2 is exactly harmless. Deployment rule: radio below
+the 2-hop chord -> baseline, never the overlay; m2 safe to leave on.
+
+**Process.** The A4-INERTNESS sentinel aborted the first launch on cell 3 over a 0.14 mm
+range-rounding difference (8.40014 vs 8.4) — immediately, as the stop rules required — and
+the diagnosis chain (R1==R2, manifest diff, literal-range byte-reproduction of the 8a-(ii)
+reference) converted the abort into the strongest inertness proof available. Three stamped
+amendments, zero silent edits. All five sentinels green across 192 cells on relaunch.
