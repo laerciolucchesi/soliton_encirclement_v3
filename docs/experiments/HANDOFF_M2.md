@@ -35,8 +35,8 @@ throughout (near-replicate seeds).
 
 On the tail time-constant `tau_fit` in the clean blocks (the λ₂ probe):
 B (N=24): baseline/m2 = 3.84, baseline/B2 = **9.53**. F (N=50): baseline/m2 = 2.52,
-baseline/B2 = **20.4** (B2's flat-tau against the baseline's ~N² growth; note baseline R² at F
-is 0.841, below the campaign's 0.9 bar — quote with that caveat).
+baseline/B2 = **20.4** (B2's flat-tau against the baseline's ~N² growth; note the baseline R² at N=50 sits below the
+campaign's 0.9 bar in BOTH clean blocks — 0.825 at E, 0.841 at F — quote with that caveat).
 
 ## 2. Verdicts against the pre-registration
 
@@ -62,8 +62,9 @@ bit-exact identity in the clean blocks (A, E — `t_settle` equal in all 8 seeds
 statistical identity under churn (C: 0.997; G: 1.000; guard dropping 99.9% of ticks). The
 degradation guard does exactly what pin (b) required.
 
-**P8 (chattering does not destabilise).** Confirmed. Toggle rates up to 0.97/s (block H) with
-no degradation attributable to switching — the highest-toggle blocks are the ones where m2
+**P8 (chattering does not destabilise).** Confirmed. Block-median toggle rates up to 0.97/s
+(block H) and a per-cell maximum of 1.07/s (block D, seed 3), with no degradation attributable
+to switching — the highest-toggle blocks are the ones where m2
 performs best.
 
 ## 3. The metric caveat that must travel with P5
@@ -107,7 +108,8 @@ the baseline, 2-hop chord for both m2 and the overlay (`range_required_c` column
 
 * Near-replicate seeds (uniform init, ideal channel): IQRs measure replication noise. One churn
   rate (12/min total; Π₂′ = 1.6 at both N — a design choice, held constant across N). Two N.
-* `t_settle` saturation at N=50 (§3); baseline `tau_fit` R² = 0.841 at F, below the 0.9 bar.
+* `t_settle` saturation at N=50 (§3); baseline `tau_fit` R² below the 0.9 bar in both N=50
+  clean blocks: 0.825 (E) and 0.841 (F).
 * m2's guard has no hysteresis on the k=2 term; toggle rates are reported and benign here, but
   denser churn was not tested.
 * Amendment ledger, all stamped pre-analysis in the runner/addendum: (1) w₂=2 + gain ×1.9201

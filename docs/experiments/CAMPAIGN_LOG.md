@@ -1175,7 +1175,7 @@ while the slow mode still decays — the DT_CROSSOVER trap mirrored) and the ver
 tau_fit (2.52, R2 caveat 0.84). *P6*: the pre-registered adverse outcome happened twice —
 dead tie with the overlay under churn at N=24 (1.003), INVERSION at N=50 (0.946, m2 better
 8/8; one B2 seed worse than baseline). *P7*: bit-exact m2==baseline below the chord in clean
-(both N), statistical identity under churn (0.997/1.000). *P8*: toggles to 0.97/s, benign.
+(both N), statistical identity under churn (0.997/1.000). *P8*: block-median toggles to 0.97/s, per-cell max 1.07/s, benign.
 
 **The headline for 4.1.** The overlay's value proposition is now one cell of the design
 space, and it is strong there: single-event reconfiguration above the 2-hop chord — tau_fit
