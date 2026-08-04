@@ -233,7 +233,10 @@ def main():
                     "(censura = medida direta de $\\Pi_2$)",
                     "A) the breach does not close before the next event\n"
                     "(censoring = a direct measure of $\\Pi_2$)"), fontweight="bold")
-    axA.legend(loc="lower right"); axA.grid(alpha=0.3)
+    # Legenda no canto superior ESQUERDO: o inferior direito e' onde vivem os
+    # rotulos de taxa (y=0.02) e o "48/min" ficava coberto nas duas linguas.
+    # O superior esquerdo e' vazio (as curvas comecam baixas a esquerda).
+    axA.legend(loc="upper left"); axA.grid(alpha=0.3)
     for xi, r in zip(x, rates):
         axA.annotate(f"{r:g}/min", (xi, 0.02), ha="center", fontsize=7.5, color="0.35")
     axA.annotate(T("taxa 48: EXCLUIDA da analise do pico,\nmedivel aqui",
