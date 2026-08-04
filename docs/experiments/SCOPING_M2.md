@@ -207,3 +207,159 @@ Requisitos, um a um:
   e a per-agente é [protocol_agent.py:99](../../protocol_agent.py#L99), ambas antes de
   qualquer código keyed no método; a leitura do env não consome RNG; o ramo m2 não sorteia
   nada. Verificação: fumaça do §5.1 (fluxo de falhas byte-idêntico entre métodos).
+
+
+---
+
+# ADENDO — pinos (a) e (b) da aprovação condicionada (2026-08-04)
+
+Aprovação condicionada a dois consertos; este adendo os fixa ANTES de qualquer
+implementação. Na verificação do pino (a) apareceu um TERCEIRO fator 2, da minha lei do
+§1.2, que muda os números do pino sem mudar seu critério — documentado em A.2 com a
+identidade que prova que o laço fechado resultante é exatamente o que o pino prescreve.
+
+## A.1 Pino (a) — o critério de justiça, explícito
+
+> **Mesma margem nominal amostrada `g·dt·λ_max` nas duas leis.**
+> N=24: baseline (250/24)·0,05·4 = **2,0833**; m2 idem = **2,0833**.
+> N=50: (250/50)·0,05·4 = **1,0000** nos dois.
+
+Consequência que simplifica tudo: sob esse critério, o speedup previsto **depende só da
+FORMA do operador**, não da sua escala —
+
+```
+speedup = (λ₂/λ_max)_m2 / (λ₂/λ_max)_m1
+```
+
+Qualquer reescala global do erro é absorvida pelo fator de ganho que restaura λ_max.
+
+## A.2 O terceiro fator 2 — e por que o default é w₂ = 2
+
+Linearizando a lei do §1.2 em torno do anel uniforme (todos os erros em unidades de
+`e = −A·δθ/(2ḡ)`): o termo k=1 dá `A₁ = L₁` (Laplaciano de 1 salto). Mas o termo k=2,
+**por ser normalizado pelo próprio vão de 2 arcos** (denominador ≈ 4ḡ, não 2ḡ), entra
+como `L₂/2` — a normalização por vão penaliza o acoplamento de salto k por 1/k. A
+combinação `(e⁽¹⁾ + w₂·e⁽²⁾)/(1+w₂)` tem operador:
+
+```
+A(w₂) = (L₁ + (w₂/2)·L₂) / (1+w₂)
+```
+
+O pino (a) calculou com o operador `(L₁+L₂)/2` — que a média w₂=1 NÃO produz sob a lei
+do §1.2. As três prescrições, lado a lado (N=24, autovalores discretos):
+
+| prescrição | operador | λ_max | margem | speedup |
+|---|---|---:|---:|---:|
+| escopo §1.2 original (w₂=1, ganho ÷1,5625) | (L₁+½L₂)/2 | 2,250 | **0,75** | **0,95 — PIOR que o baseline** |
+| pino (a) literal sobre a lei §1.2 (w₂=1, ×1,2801) | (L₁+½L₂)/2 | 2,250 | **1,50** | **1,90** |
+| **este adendo (w₂=2, ×1,9201)** | **(L₁+L₂)/3** | 2,08323 | **2,0833 = baseline** | **3,1565** |
+
+O escopo original não só nascia com metade da margem, como o pino diagnosticou — nascia
+com speedup **0,95**, a P5 refutada pela construção duas vezes.
+
+**Conserto:** `M2_W2 = 2` por default. w₂ = k cancela exatamente o 1/k da normalização
+por vão — peso FÍSICO igual por acoplamento, que é o anel densificado uniforme `L₁+L₂`
+que a predição do pino pressupõe. A combinação continua convexa (÷(1+w₂) = ÷3), então
+`e ∈ [−1,1]` é mantido, como o pino exige. E:
+
+```
+M2_GAIN_SCALE = λ_max(L₁) / λ_max(A(w₂=2))  =  4 / 2,08323  =  ×1,92010   (N=24)
+                                               4 / 2,07869  =  ×1,92429   (N=50)
+```
+
+**Identidade que prova a equivalência com o pino (a):** o laço do pino (×1,2801 sobre
+`(L₁+L₂)/2`) e o deste adendo (×1,9201 sobre `(L₁+L₂)/3`) são o MESMO laço fechado —
+ambos restauram `escala·λ_max = 4`: 1,2801·3,1248 = 4,000 = 1,9201·2,08322. A diferença
+entre os fatores (1,9201/1,2801 = 3/2) é exatamente a razão dos divisores internos. O
+pino estava certo sobre o laço-alvo; o que faltava era o w₂ que faz a lei do §1.2
+produzir esse laço.
+
+**Predições derivadas DESSA fórmula, pinadas:**
+
+| N | λ₂(L₁) | λ₂(L₁+L₂) | razão λ₂ | λ_max(L₁+L₂) | razão λ_max | **predição** |
+|---:|---:|---:|---:|---:|---:|---:|
+| 24 | 0,0681483 | 0,3360975 | 4,93185 | 6,2496889 (k=7) | 1,5624222 | **3,1565** |
+| 50 | 0,0157706 | 0,0786043 | 4,98423 | 6,2360680 (k=15) | 1,5590170 | **3,1970** |
+
+`M2_GAIN_SCALE` é computado no config dos autovalores discretos (fórmula fechada, zero
+RNG), com override numérico por env.
+
+## A.3 Pino (b) — a guarda restaura lei E ganho
+
+Quando o termo k=2 cai, o tick alimenta **`e⁽¹⁾` sem escala nenhuma** — nem combinação,
+nem `M2_GAIN_SCALE`. Implementação que torna isso trivial e bit-exato: o caminho do erro
+no controlador é LINEAR (`du_from_error = k_e_tau·e_tau`, controllers.py, laço local),
+então o chaveamento de ganho é implementado **escalando o erro**, não o `k_e_tau` do
+controlador. Tick degradado ⇒ o mesmo caminho aritmético do baseline, float a float — a
+P7 (m2 ≈ baseline em c=1,61) segue da construção, e a fumaça S3 a verifica por
+byte-igualdade.
+
+Declarações exigidas pelo pino:
+
+- **(i)** `e⁽²⁾` exige os DOIS lados frescos. Um lado ausente ou não fresco descarta o
+  termo k=2 INTEIRO (meio termo mudaria o operador e a margem). As colunas por lado
+  existem só para diagnóstico.
+- **(ii)** chattering do chaveamento sob churn: medido por `m2_k2_dropped_frac_steady20`
+  (fração dos ticks em regime com o termo descartado) e ganha linha própria no
+  pré-registro (P8, §A.4). **Adição minha, justificada:** a fração não distingue 1
+  chaveamento de 1000 — acrescento `m2_k2_toggles_per_s_steady20` (taxa de bordas do
+  chaveamento), que é a medida de chattering de fato. As duas colunas com o escopo no
+  nome e `run_duration_s` na linha.
+- Guarda completa: o termo k=2 cai quando o anel visível fresco tem **< 5 membros** (a
+  extensão ingênua aliasa `succ₂ = pred₁` num anel de 3 — §3) OU qualquer candidato k=2
+  está ausente/não fresco. Sem histerese no k=2 (a histerese existente protege só
+  pred₁/succ₁); qualquer flapping de identidade resultante aparece nas colunas de
+  chattering — declarado, não escondido.
+
+## A.4 Itens de pré-registro exigidos (entram no docstring do runner antes da grade)
+
+**1. Tabela de células enumerada — 192, sem poda.** A estimativa "~200–250 com poda" do
+§5.2 estava errada nas duas direções ao mesmo tempo (poda reduziria, não aumentaria; a
+grade cheia é 192). Conta certa: 3 métodos × 2 N × 2 regimes × 2 c × 8 sementes:
+
+| bloco | N | regime | c (alcance em m) | células |
+|---|---:|---|---|---:|
+| A | 24 | óbito único | 1,6089 (8,4) | 24 |
+| B | 24 | óbito único | 3,0071 (15,7) | 24 |
+| C | 24 | churn 12/min | 1,6089 (8,4) | 24 |
+| D | 24 | churn 12/min | 3,0071 (15,7) | 24 |
+| E | 50 | óbito único | 1,6089 (4,041) | 24 |
+| F | 50 | óbito único | 3,0071 (7,553) | 24 |
+| G | 50 | churn 12/min | 1,6089 (4,041) | 24 |
+| H | 50 | churn 12/min | 3,0071 (7,553) | 24 |
+
+Declarações que fecham a conta: **timeout único fd = 0,25 s** (a 8a-(ii) já mediu o eixo
+do timeout; dobrá-lo aqui dobraria a grade); **churn 12/min TOTAL nos dois N** (mesmo
+fluxo de eventos por rodada entre N, comparabilidade pareada); blocos C e D **re-rodam**
+baseline e overlay em vez de reusar as linhas da 8a-(ii), para proveniência uniforme sob
+um commit — com SENTINELA: o `target_telemetry.csv` das células baseline re-rodadas deve
+sair **byte-idêntico** ao de `comm_churn_runs/` (o caminho baseline não é editado; se
+divergir, a implementação não é inerte e o sweep aborta). Custo: medido por célula de
+calibração em cada N na fase de fumaça, não estimado.
+
+**2. N=50 pinado.** Autovalores discretos na tabela do A.2 (λ_max em k=15, não no
+contínuo). Alcances em metros derivados de `c·2R·sin(π/N)` POR N: corda₁(50) = 2,5116 m
+⇒ **4,041 m** e **7,553 m** (não os metros de N=24). Limiar: 2cos(π/50) = **1,99605**;
+corda₂(50) = 5,0133 m.
+
+**3. P6 simétrica.** Predição: overlay ≥ m2 > baseline em `egap_mean_steady20` sob churn
+em c=3,01. **Desfecho adverso registrado com o significado:** se m2 superar o overlay, a
+comparação de alcance igual ENFRAQUECE o argumento do §4.1 da tese — o overlay perderia
+para uma densificação passiva no mesmo raio de rádio; isso é resultado publicável, não
+falha. Predição cruzada no regime limpo, N=50: overlay/m2 ≈ 16,0/3,197 ≈ **5,0×**.
+
+**4. Linha de ameaça declarada.** A margem nominal igual assume o fator de ganho efetivo
+da normalização por arcos (1/(2ḡ), lambdas uniformes) COMUM às duas leis. Lambdas não
+uniformes ou desvios grandes do uniforme quebram a igualdade nominal. Mitigação: a
+campanha fixa `PROTECTION_ANGLE_DEG=0` explicitamente (regra 3) e a ameaça fica na seção
+de ameaças do runner.
+
+**5. Fumaças, incluindo a exigida.** S1: baseline vs m2, mesma semente ⇒ `failure_start`
+byte-idêntico (RNG não desloca). S2: `M2_W2=0` + `M2_GAIN_SCALE=1` ⇒ telemetria
+byte-idêntica ao baseline. S3 (a exigida): guarda forçada — alcance abaixo da corda de
+2 saltos, onde o anel visível é 3 — ⇒ byte-idêntica ao baseline (P7 por construção).
+S4: c=3,01 ⇒ telemetria DIFERE (termo ativo; sanidade de que a lei liga).
+
+Sequência acordada: este adendo (commit isolado) → implementação com os testes do §5.1 →
+fumaças → pré-registro completo volta para revisão ANTES de disparar a grade. Nenhuma
+grade roda sem essa revisão.
